@@ -46,6 +46,7 @@ import (
 	"github.com/netbirdio/netbird/management/server/http/handlers/accounts"
 	"github.com/netbirdio/netbird/management/server/http/handlers/dns"
 	"github.com/netbirdio/netbird/management/server/http/handlers/events"
+	"github.com/netbirdio/netbird/management/server/http/handlers/mfagate"
 	"github.com/netbirdio/netbird/management/server/http/handlers/groups"
 	"github.com/netbirdio/netbird/management/server/http/handlers/idp"
 	"github.com/netbirdio/netbird/management/server/http/handlers/instance"
@@ -159,6 +160,7 @@ func NewAPIHandler(ctx context.Context, accountManager account.Manager, networks
 	users.AddEndpoints(accountManager, router)
 	users.AddInvitesEndpoints(accountManager, router)
 	users.AddPublicInvitesEndpoints(accountManager, router)
+	users.AddMFAEndpoints(accountManager, router)
 	setup_keys.AddEndpoints(accountManager, router)
 	policies.AddEndpoints(accountManager, LocationManager, router)
 	policies.AddPostureCheckEndpoints(accountManager, LocationManager, router)
@@ -182,9 +184,11 @@ func NewAPIHandler(ctx context.Context, accountManager account.Manager, networks
 		oauthHandler.RegisterEndpoints(router)
 	}
 
-	// Mount embedded IdP handler at /oauth2 path if configured
+	// Mount embedded IdP handler at /oauth2 path, wrapped with MFA gate
 	if embeddedIdpEnabled {
-		rootRouter.PathPrefix("/oauth2").Handler(corsMiddleware.Handler(embeddedIdP.Handler()))
+		dexHandler := corsMiddleware.Handler(embeddedIdP.Handler())
+		mfaGate := mfagate.New(dexHandler, embeddedIdP.DexStorage(), accountManager.GetStore())
+		rootRouter.PathPrefix("/oauth2").Handler(mfaGate)
 	}
 
 	return rootRouter, nil

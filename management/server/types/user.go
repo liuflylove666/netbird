@@ -71,6 +71,12 @@ type UserInfo struct {
 	// IdPID is the identity provider ID (connector ID) extracted from the Dex-encoded user ID.
 	// This field is only populated when the user ID can be decoded from Dex's format.
 	IdPID string `json:"idp_id,omitempty"`
+	// LdapGroups are the LDAP group names to add the user to during creation.
+	LdapGroups []string `json:"ldap_groups,omitempty"`
+	// ForcePasswordChange requires the user to change their password on next login.
+	ForcePasswordChange bool `json:"force_password_change,omitempty"`
+	// MFAEnabled indicates whether MFA (TOTP) is active for this user.
+	MFAEnabled bool `json:"mfa_enabled,omitempty"`
 }
 
 // User represents a user of the system
@@ -104,6 +110,14 @@ type User struct {
 
 	Name  string `gorm:"default:''"`
 	Email string `gorm:"default:''"`
+
+	// ForcePasswordChange requires the user to change their password on next login
+	ForcePasswordChange bool `gorm:"default:false"`
+
+	// MFAEnabled indicates whether MFA (TOTP) is active for this user
+	MFAEnabled bool `gorm:"default:false"`
+	// MFASecret is the base32-encoded TOTP secret (encrypted at rest)
+	MFASecret string `gorm:"default:''"`
 }
 
 // IsBlocked returns true if the user is blocked, false otherwise
@@ -158,17 +172,19 @@ func (u *User) ToUserInfo(userData *idp.UserData) (*UserInfo, error) {
 		}
 
 		return &UserInfo{
-			ID:              u.Id,
-			Email:           u.Email,
-			Name:            name,
-			Role:            string(u.Role),
-			AutoGroups:      u.AutoGroups,
-			Status:          string(UserStatusActive),
-			IsServiceUser:   u.IsServiceUser,
-			IsBlocked:       u.Blocked,
-			LastLogin:       u.GetLastLogin(),
-			Issued:          u.Issued,
-			PendingApproval: u.PendingApproval,
+			ID:                  u.Id,
+			Email:               u.Email,
+			Name:                name,
+			Role:                string(u.Role),
+			AutoGroups:          u.AutoGroups,
+			Status:              string(UserStatusActive),
+			IsServiceUser:       u.IsServiceUser,
+			IsBlocked:           u.Blocked,
+			LastLogin:           u.GetLastLogin(),
+			Issued:              u.Issued,
+			PendingApproval:     u.PendingApproval,
+			ForcePasswordChange: u.ForcePasswordChange,
+			MFAEnabled:          u.MFAEnabled,
 		}, nil
 	}
 	if userData.ID != u.Id {
@@ -181,18 +197,20 @@ func (u *User) ToUserInfo(userData *idp.UserData) (*UserInfo, error) {
 	}
 
 	return &UserInfo{
-		ID:              u.Id,
-		Email:           userData.Email,
-		Name:            userData.Name,
-		Role:            string(u.Role),
-		AutoGroups:      autoGroups,
-		Status:          string(userStatus),
-		IsServiceUser:   u.IsServiceUser,
-		IsBlocked:       u.Blocked,
-		LastLogin:       u.GetLastLogin(),
-		Issued:          u.Issued,
-		PendingApproval: u.PendingApproval,
-		Password:        userData.Password,
+		ID:                  u.Id,
+		Email:               userData.Email,
+		Name:                userData.Name,
+		Role:                string(u.Role),
+		AutoGroups:          autoGroups,
+		Status:              string(userStatus),
+		IsServiceUser:       u.IsServiceUser,
+		IsBlocked:           u.Blocked,
+		LastLogin:           u.GetLastLogin(),
+		Issued:              u.Issued,
+		PendingApproval:     u.PendingApproval,
+		Password:            userData.Password,
+		ForcePasswordChange: u.ForcePasswordChange,
+		MFAEnabled:          u.MFAEnabled,
 	}, nil
 }
 
@@ -221,6 +239,9 @@ func (u *User) Copy() *User {
 		IntegrationReference: u.IntegrationReference,
 		Email:                u.Email,
 		Name:                 u.Name,
+		ForcePasswordChange:  u.ForcePasswordChange,
+		MFAEnabled:           u.MFAEnabled,
+		MFASecret:            u.MFASecret,
 	}
 }
 

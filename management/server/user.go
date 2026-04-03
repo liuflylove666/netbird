@@ -71,6 +71,15 @@ func (am *DefaultAccountManager) CreateUser(ctx context.Context, accountID, user
 	if user.IsServiceUser {
 		return am.createServiceUser(ctx, accountID, userID, types.StrRoleToUserRole(user.Role), user.Name, user.NonDeletable, user.AutoGroups)
 	}
+
+	if user.IdPID != "" && IsEmbeddedIdp(am.idpManager) {
+		result, err := am.createExternalIdpPreRegistration(ctx, accountID, userID, user)
+		if err != nil {
+			return nil, err
+		}
+		return result.UserInfo, nil
+	}
+
 	return am.inviteNewUser(ctx, accountID, userID, user)
 }
 
@@ -262,10 +271,6 @@ func (am *DefaultAccountManager) UpdateUserPassword(ctx context.Context, account
 		return status.Errorf(status.PreconditionFailed, "password change is only available with embedded identity provider")
 	}
 
-	if oldPassword == "" {
-		return status.Errorf(status.InvalidArgument, "old password is required")
-	}
-
 	if newPassword == "" {
 		return status.Errorf(status.InvalidArgument, "new password is required")
 	}
@@ -275,9 +280,36 @@ func (am *DefaultAccountManager) UpdateUserPassword(ctx context.Context, account
 		return status.Errorf(status.Internal, "failed to get embedded IdP manager")
 	}
 
-	err := embeddedIdp.UpdateUserPassword(ctx, currentUserID, targetUserID, oldPassword, newPassword)
-	if err != nil {
-		return status.Errorf(status.InvalidArgument, "failed to update password: %v", err)
+	isSelf := currentUserID == targetUserID
+	if isSelf {
+		if oldPassword == "" {
+			return status.Errorf(status.InvalidArgument, "old password is required")
+		}
+		err := embeddedIdp.UpdateUserPassword(ctx, currentUserID, targetUserID, oldPassword, newPassword)
+		if err != nil {
+			return status.Errorf(status.InvalidArgument, "failed to update password: %v", err)
+		}
+	} else {
+		allowed, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, currentUserID, modules.Users, operations.Update)
+		if err != nil {
+			return status.NewPermissionValidationError(err)
+		}
+		if !allowed {
+			return status.NewPermissionDeniedError()
+		}
+		err = embeddedIdp.ResetUserPassword(ctx, targetUserID, newPassword)
+		if err != nil {
+			return status.Errorf(status.InvalidArgument, "failed to reset password: %v", err)
+		}
+	}
+
+	// Clear force_password_change flag after successful password change
+	user, err := am.Store.GetUserByUserID(ctx, store.LockingStrengthNone, targetUserID)
+	if err == nil && user != nil && user.ForcePasswordChange {
+		user.ForcePasswordChange = false
+		if saveErr := am.Store.SaveUser(ctx, user); saveErr != nil {
+			log.WithContext(ctx).Warnf("failed to clear force_password_change for user %s: %v", targetUserID, saveErr)
+		}
 	}
 
 	am.StoreEvent(ctx, currentUserID, targetUserID, accountID, activity.UserPasswordChanged, nil)
@@ -915,6 +947,11 @@ func (am *DefaultAccountManager) GetOrCreateAccountByUser(ctx context.Context, u
 	userID := userAuth.UserId
 	domain := userAuth.Domain
 
+	// Check LDAP group restrictions before allowing login
+	if err := am.checkLDAPGroupRestriction(ctx, userID, userAuth.Email); err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 	unlock := am.Store.AcquireGlobalLock(ctx)
 	defer unlock()
@@ -950,6 +987,41 @@ func (am *DefaultAccountManager) GetOrCreateAccountByUser(ctx context.Context, u
 	}
 
 	return account, nil
+}
+
+// checkLDAPGroupRestriction verifies that an LDAP user is a member of the required groups.
+func (am *DefaultAccountManager) checkLDAPGroupRestriction(ctx context.Context, userID, email string) error {
+	embeddedIdp, ok := am.idpManager.(*idp.EmbeddedIdPManager)
+	if !ok {
+		return nil
+	}
+
+	_, connectorID, err := dex.DecodeDexUserID(userID)
+	if err != nil || connectorID == "" || connectorID == "local" {
+		return nil
+	}
+
+	conn, err := embeddedIdp.GetConnector(ctx, connectorID)
+	if err != nil || conn.Type != "ldap" || conn.LDAP == nil {
+		return nil
+	}
+
+	if len(conn.LDAP.RequiredGroups) == 0 {
+		return nil
+	}
+
+	isMember, err := dex.CheckUserInLDAPGroups(conn.LDAP, email)
+	if err != nil {
+		log.WithContext(ctx).Warnf("failed to check LDAP group membership for %s: %v", email, err)
+		return status.Errorf(status.PermissionDenied, "failed to verify group membership")
+	}
+
+	if !isMember {
+		log.WithContext(ctx).Infof("LDAP user %s is not a member of required groups %v, login denied", email, conn.LDAP.RequiredGroups)
+		return status.Errorf(status.PermissionDenied, "user is not a member of the required LDAP groups: %v", conn.LDAP.RequiredGroups)
+	}
+
+	return nil
 }
 
 // GetUsersFromAccount performs a batched request for users from IDP by account ID apply filter on what data to return
@@ -1241,6 +1313,24 @@ func (am *DefaultAccountManager) deleteRegularUser(ctx context.Context, accountI
 		} else {
 			log.WithContext(ctx).Debugf("skipped deleting user %s from IDP, error: %v", targetUserInfo.ID, err)
 		}
+
+		// If the user is from an LDAP connector, also delete from the LDAP directory
+		if embeddedIdp, ok := am.idpManager.(*idp.EmbeddedIdPManager); ok {
+			rawUID, connectorID, decErr := dex.DecodeDexUserID(targetUserInfo.ID)
+			if decErr == nil && connectorID != "" && connectorID != "local" {
+				conn, connErr := embeddedIdp.GetConnector(ctx, connectorID)
+				if connErr == nil && conn.Type == "ldap" && conn.LDAP != nil {
+					if rmErr := dex.RemoveUserFromLDAPGroups(conn.LDAP, targetUserInfo.Email); rmErr != nil {
+						log.WithContext(ctx).Warnf("failed to remove LDAP user %s from groups: %v", targetUserInfo.Email, rmErr)
+					}
+					if delErr := dex.DeleteLDAPUser(conn.LDAP, targetUserInfo.Email); delErr != nil {
+						log.WithContext(ctx).Warnf("failed to delete LDAP user %s (uid=%s) from directory: %v", targetUserInfo.Email, rawUID, delErr)
+					} else {
+						log.WithContext(ctx).Infof("deleted LDAP user %s (uid=%s) from directory via connector %s", targetUserInfo.Email, rawUID, connectorID)
+					}
+				}
+			}
+		}
 	}
 
 	var addPeerRemovedEvents []func()
@@ -1478,6 +1568,10 @@ func (am *DefaultAccountManager) CreateUserInvite(ctx context.Context, accountID
 		return nil, status.Errorf(status.PreconditionFailed, "invite links are only available with embedded identity provider")
 	}
 
+	if invite.IdPID != "" {
+		return am.createExternalIdpPreRegistration(ctx, accountID, initiatorUserID, invite)
+	}
+
 	if IsLocalAuthDisabled(ctx, am.idpManager) {
 		return nil, status.Errorf(status.PreconditionFailed, "local user creation is disabled - use an external identity provider")
 	}
@@ -1568,6 +1662,116 @@ func (am *DefaultAccountManager) CreateUserInvite(ctx context.Context, accountID
 	}, nil
 }
 
+// createExternalIdpPreRegistration creates a user in the external IDP (e.g. LDAP) and
+// a pre-registration record in NetBird. When the user logs in for the first time, the system
+// will match by email and automatically approve them with the configured role and groups.
+func (am *DefaultAccountManager) createExternalIdpPreRegistration(ctx context.Context, accountID, initiatorUserID string, invite *types.UserInfo) (*types.UserInvite, error) {
+	if err := validateUserInvite(invite); err != nil {
+		return nil, err
+	}
+
+	if invite.Password == "" {
+		return nil, status.Errorf(status.InvalidArgument, "password is required when creating an external IDP user")
+	}
+
+	if err := validatePassword(invite.Password); err != nil {
+		return nil, status.Errorf(status.InvalidArgument, "invalid password: %v", err)
+	}
+
+	allowed, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, initiatorUserID, modules.Users, operations.Create)
+	if err != nil {
+		return nil, status.NewPermissionValidationError(err)
+	}
+	if !allowed {
+		return nil, status.NewPermissionDeniedError()
+	}
+
+	embeddedIdp, ok := am.idpManager.(*idp.EmbeddedIdPManager)
+	if !ok {
+		return nil, status.Errorf(status.Internal, "failed to get embedded IdP manager")
+	}
+
+	conn, err := embeddedIdp.GetConnector(ctx, invite.IdPID)
+	if err != nil {
+		return nil, status.Errorf(status.InvalidArgument, "identity provider connector %q not found", invite.IdPID)
+	}
+
+	if conn.Type != "ldap" || conn.LDAP == nil {
+		return nil, status.Errorf(status.InvalidArgument, "connector %q is not an LDAP identity provider (type: %s)", invite.IdPID, conn.Type)
+	}
+
+	existingUsers, err := am.Store.GetAccountUsers(ctx, store.LockingStrengthNone, accountID)
+	if err != nil {
+		return nil, err
+	}
+	for _, user := range existingUsers {
+		if strings.EqualFold(user.Email, invite.Email) {
+			return nil, status.Errorf(status.UserAlreadyExists, "user with this email already exists")
+		}
+	}
+
+	existingInvite, err := am.Store.GetUserInviteByEmail(ctx, store.LockingStrengthNone, accountID, invite.Email)
+	if err != nil {
+		if sErr, ok := status.FromError(err); !ok || sErr.Type() != status.NotFound {
+			return nil, fmt.Errorf("failed to check existing invites: %w", err)
+		}
+	}
+	if existingInvite != nil {
+		return nil, status.Errorf(status.AlreadyExists, "a pre-registration or invite already exists for this email")
+	}
+
+	if err := dex.CreateLDAPUser(conn.LDAP, invite.Email, invite.Password, invite.Name); err != nil {
+		return nil, status.Errorf(status.Internal, "failed to create user in LDAP: %v", err)
+	}
+
+	log.WithContext(ctx).Infof("created LDAP user %s in directory via connector %s", invite.Email, invite.IdPID)
+
+	if len(invite.LdapGroups) > 0 {
+		if err := dex.AddUserToLDAPGroups(conn.LDAP, invite.Email, invite.LdapGroups); err != nil {
+			log.WithContext(ctx).WithError(err).Warnf("failed to add LDAP user %s to groups %v", invite.Email, invite.LdapGroups)
+		} else {
+			log.WithContext(ctx).Infof("added LDAP user %s to groups %v", invite.Email, invite.LdapGroups)
+		}
+	}
+
+	// Derive the uid from email (same logic as CreateLDAPUser) and encode as Dex user ID
+	emailParts := strings.SplitN(invite.Email, "@", 2)
+	ldapUID := emailParts[0]
+	dexUserID := dex.EncodeDexUserID(ldapUID, invite.IdPID)
+
+	// Create the actual User record so the user appears in the user list immediately
+	newUser := types.NewUser(dexUserID, types.StrRoleToUserRole(invite.Role), false, false, "", invite.AutoGroups, types.UserIssuedAPI, invite.Email, invite.Name)
+	newUser.AccountID = accountID
+	newUser.ForcePasswordChange = invite.ForcePasswordChange
+
+	if err := am.Store.SaveUser(ctx, newUser); err != nil {
+		if delErr := dex.DeleteLDAPUser(conn.LDAP, invite.Email); delErr != nil {
+			log.WithContext(ctx).WithError(delErr).Errorf("failed to rollback LDAP user %s after DB save failure", invite.Email)
+		}
+		return nil, status.Errorf(status.Internal, "failed to save user record: %v", err)
+	}
+
+	am.StoreEvent(ctx, initiatorUserID, dexUserID, accountID, activity.UserJoined, map[string]any{
+		"email":  invite.Email,
+		"idp_id": invite.IdPID,
+	})
+
+	log.WithContext(ctx).Infof("created NetBird user record for LDAP user %s (dex ID: %s)", invite.Email, dexUserID)
+
+	return &types.UserInvite{
+		UserInfo: &types.UserInfo{
+			ID:         dexUserID,
+			Email:      invite.Email,
+			Name:       invite.Name,
+			Role:       invite.Role,
+			AutoGroups: invite.AutoGroups,
+			Status:     string(types.UserStatusActive),
+			Issued:     types.UserIssuedAPI,
+			IdPID:      invite.IdPID,
+		},
+	}, nil
+}
+
 // GetUserInviteInfo retrieves invite information from a token (public endpoint).
 func (am *DefaultAccountManager) GetUserInviteInfo(ctx context.Context, token string) (*types.UserInviteInfo, error) {
 	if err := types.ValidateInviteToken(token); err != nil {
@@ -1626,6 +1830,7 @@ func (am *DefaultAccountManager) ListUserInvites(ctx context.Context, accountID,
 				Name:       record.Name,
 				Role:       record.Role,
 				AutoGroups: record.AutoGroups,
+				IdPID:      record.IdpID,
 			},
 			InviteExpiresAt: record.ExpiresAt,
 			InviteCreatedAt: record.CreatedAt,

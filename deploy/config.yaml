@@ -1,0 +1,57 @@
+# NetBird Combined Server Configuration
+# Usage: docker compose up -d --build
+
+server:
+  listenAddress: ":80"
+  exposedAddress: "http://localhost:80"
+  stunPorts:
+    - 3478
+  metricsPort: 9090
+  healthcheckAddress: ":9000"
+  logLevel: "info"
+  logFile: "console"
+
+  authSecret: "XtyD1FaUSbPiDDrwSU1UQaRnjDgRo1ih/drrWVCT+R4="
+  dataDir: "/var/lib/netbird"
+
+  auth:
+    issuer: "http://localhost/oauth2"
+    signKeyRefreshEnabled: true
+    dashboardRedirectURIs:
+      - "http://localhost/nb-auth"
+      - "http://localhost/nb-silent-auth"
+    cliRedirectURIs:
+      - "http://localhost:53000/"
+    owner:
+      email: "admin@netbird.local"
+      password: "Admin@123"
+    connectors:
+      - type: ldap
+        name: "OpenLDAP"
+        id: "openldap"
+        config:
+          host: "openldap:389"
+          insecureNoSSL: true
+          insecureSkipVerify: true
+          bindDN: "cn=admin,dc=example,dc=org"
+          bindPW: "adminpassword"
+          userSearch:
+            baseDN: "ou=users,dc=example,dc=org"
+            username: "mail"
+            idAttr: "uid"
+            emailAttr: "mail"
+            nameAttr: "cn"
+          groupSearch:
+            baseDN: "ou=groups,dc=example,dc=org"
+            nameAttr: "cn"
+            userMatchers:
+              - userAttr: "DN"
+                groupAttr: "member"
+          requiredGroups:
+            - "netbird-users"
+
+  disableGeoliteUpdate: true
+
+  store:
+    engine: "sqlite"
+    encryptionKey: "ENnxrZc34qwY1UnfanSD9ITQaZAXzZVU0MMNRiemWTo="

@@ -2,6 +2,7 @@ package idp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -48,6 +49,8 @@ type EmbeddedIdPConfig struct {
 	// Existing local users are preserved and will be able to login again if re-enabled.
 	// Cannot be enabled if no external identity provider connectors are configured.
 	LocalAuthDisabled bool
+	// Connectors are static identity provider connectors loaded from the config file on startup.
+	Connectors []dex.Connector
 }
 
 // EmbeddedStorageConfig holds storage configuration for the embedded IdP.
@@ -175,6 +178,8 @@ func (c *EmbeddedIdPConfig) ToYAMLConfig() (*dex.YAMLConfig, error) {
 		}
 	}
 
+	cfg.StaticConnectors = c.Connectors
+
 	return cfg, nil
 }
 
@@ -264,9 +269,70 @@ func NewEmbeddedIdPManager(ctx context.Context, config *EmbeddedIdPConfig, appMe
 	}, nil
 }
 
+// DexStorage returns the underlying Dex storage for direct access.
+// Used by the MFA gate handler to look up authorization codes and resolve user identity.
+func (m *EmbeddedIdPManager) DexStorage() storage.Storage {
+	return m.provider.Storage()
+}
+
 // Handler returns the HTTP handler for serving OIDC requests.
+// It wraps the Dex handler with additional endpoints:
+//   - /oauth2/end-session: clears session and redirects (OIDC RP-Initiated Logout)
+//   - /oauth2/.well-known/openid-configuration: patched to include end_session_endpoint
 func (m *EmbeddedIdPManager) Handler() http.Handler {
-	return m.provider.Handler()
+	dexHandler := m.provider.Handler()
+	issuer := m.provider.GetIssuer()
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/oauth2/end-session", func(w http.ResponseWriter, r *http.Request) {
+		redirectURI := r.URL.Query().Get("post_logout_redirect_uri")
+		if redirectURI == "" {
+			redirectURI = "/"
+		}
+		http.Redirect(w, r, redirectURI, http.StatusFound)
+	})
+
+	mux.HandleFunc("/oauth2/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		rec := &responseRecorder{body: &strings.Builder{}, header: http.Header{}, statusCode: http.StatusOK}
+		dexHandler.ServeHTTP(rec, r)
+
+		var doc map[string]interface{}
+		if err := json.Unmarshal([]byte(rec.body.String()), &doc); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(rec.body.String())) //nolint:errcheck
+			return
+		}
+		doc["end_session_endpoint"] = issuer + "/end-session"
+
+		body, _ := json.Marshal(doc)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.WriteHeader(rec.statusCode)
+		w.Write(body) //nolint:errcheck
+	})
+
+	mux.Handle("/oauth2/", dexHandler)
+
+	return mux
+}
+
+type responseRecorder struct {
+	header     http.Header
+	body       *strings.Builder
+	statusCode int
+}
+
+func (r *responseRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *responseRecorder) WriteHeader(code int) {
+	r.statusCode = code
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	return r.body.Write(b)
 }
 
 // Stop gracefully shuts down the embedded IdP provider.
@@ -505,12 +571,10 @@ func (m *EmbeddedIdPManager) DeleteUser(ctx context.Context, userID string) erro
 // It verifies that the current user is changing their own password and
 // validates the current password before updating to the new password.
 func (m *EmbeddedIdPManager) UpdateUserPassword(ctx context.Context, currentUserID, targetUserID string, oldPassword, newPassword string) error {
-	// Verify the user is changing their own password
 	if currentUserID != targetUserID {
 		return fmt.Errorf("users can only change their own password")
 	}
 
-	// Verify the new password is different from the old password
 	if oldPassword == newPassword {
 		return fmt.Errorf("new password must be different from current password")
 	}
@@ -526,6 +590,30 @@ func (m *EmbeddedIdPManager) UpdateUserPassword(ctx context.Context, currentUser
 	log.WithContext(ctx).Debugf("updated password for user %s in embedded IdP", targetUserID)
 
 	return nil
+}
+
+// ResetUserPassword resets a user's password without requiring the old password (admin operation).
+func (m *EmbeddedIdPManager) ResetUserPassword(ctx context.Context, targetUserID string, newPassword string) error {
+	err := m.provider.ResetUserPassword(ctx, targetUserID, newPassword)
+	if err != nil {
+		if m.appMetrics != nil {
+			m.appMetrics.IDPMetrics().CountRequestError()
+		}
+		return err
+	}
+
+	log.WithContext(ctx).Debugf("admin reset password for user %s in embedded IdP", targetUserID)
+
+	return nil
+}
+
+// IsLDAPUser checks if a user ID belongs to an LDAP connector.
+func (m *EmbeddedIdPManager) IsLDAPUser(userID string) bool {
+	_, connID, err := dex.DecodeDexUserID(userID)
+	if err != nil {
+		return false
+	}
+	return connID != "" && connID != "local"
 }
 
 // CreateConnector creates a new identity provider connector in Dex.

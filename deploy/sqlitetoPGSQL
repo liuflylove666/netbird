@@ -1,0 +1,186 @@
+docker run -d \
+  --name postgres-server \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password \
+  -p 5432:5432 \
+  -v postgres_data:/var/lib/postgresql/data \
+  postgres:16
+
+
+
+Back Up the SQLite Store
+Before migrating, create a backup of your SQLite database:
+
+mkdir backup
+docker compose cp -a netbird-server:/var/lib/netbird/. backup/
+
+Copy
+Copied!
+Install pgloader
+The migration uses pgloader to transfer data from SQLite to PostgreSQL:
+
+# Debian/Ubuntu
+sudo apt-get install pgloader
+
+# macOS
+brew install pgloader
+
+Copy
+Copied!
+Create the Migration File
+Create a file called sqlite.load with the following content:
+
+LOAD DATABASE
+     FROM sqlite:///root/combined/backup/store.db
+     INTO postgresql://postgres:password@localhost:5432/postgres
+
+WITH include drop, create tables, create indexes, reset sequences
+
+CAST
+     column accounts.is_domain_primary_account                    to boolean,
+     column accounts.settings_peer_login_expiration_enabled       to boolean,
+     column accounts.settings_peer_inactivity_expiration_enabled  to boolean,
+     column accounts.settings_regular_users_view_blocked          to boolean,
+     column accounts.settings_groups_propagation_enabled          to boolean,
+     column accounts.settings_jwt_groups_enabled                  to boolean,
+     column accounts.settings_routing_peer_dns_resolution_enabled to boolean,
+     column accounts.settings_extra_peer_approval_enabled         to boolean,
+     column accounts.settings_extra_user_approval_required        to boolean,
+     column accounts.settings_lazy_connection_enabled             to boolean
+;
+
+Copy
+Copied!
+Update the SQLite path and PostgreSQL connection string to match your environment.
+
+Run the Migration
+pgloader sqlite.load
+
+Copy
+Copied!
+Update config.yaml
+On your main server, update the store section in config.yaml to use PostgreSQL:
+
+server:
+  # ... existing settings ...
+
+  store:
+    engine: "postgres"
+    dsn: "host=postgres-server user=postgres password=password dbname=postgres port=5432"
+
+Copy
+Copied!
+Alternatively, you can pass the connection string as an environment variable instead of putting it in the config file:
+
+  netbird-server:
+    environment:
+      - NETBIRD_STORE_ENGINE_POSTGRES_DSN=host=postgres-server user=postgres password=password dbname=postgres port=5432
+
+Copy
+Copied!
+Restart and Verify
+docker compose up -d
+
+Copy
+Copied!
+Check the logs to confirm PostgreSQL is being used:
+
+docker compose logs netbird-server | grep store
+
+
+
+Migrate Auth Store
+The embedded identity provider (Dex) uses a separate SQLite database (idp.db) to store authentication data such as users, passwords, connectors, sessions, and tokens. You can optionally migrate this to PostgreSQL as well.
+
+Create the Auth Database
+docker exec postgres-server psql -U postgres -c "CREATE DATABASE netbird_auth;"
+
+Copy
+Copied!
+Create the Auth Migration File
+Create a file called auth-sqlite.load with the following content:
+
+LOAD DATABASE
+     FROM sqlite:///root/combined/backup/idp.db
+     INTO postgresql://postgres:password@localhost:5432/netbird_auth
+
+WITH include drop, create tables, create indexes, reset sequences
+
+CAST
+     column client.public                            to boolean,
+     column auth_request.force_approval_prompt       to boolean,
+     column auth_request.logged_in                   to boolean,
+     column auth_request.claims_email_verified       to boolean,
+     column auth_code.claims_email_verified          to boolean,
+     column refresh_token.claims_email_verified      to boolean
+;
+
+Copy
+Copied!
+Update the SQLite path and PostgreSQL connection string to match your environment.
+
+Run the Auth Migration
+pgloader auth-sqlite.load
+
+Copy
+Copied!
+Update config.yaml
+Add the authStore section to your config.yaml:
+
+server:
+  # ... existing settings ...
+
+  authStore:
+    engine: "postgres"
+    dsn: "host=postgres-server port=5432 user=postgres password=password dbname=netbird_auth sslmode=disable"
+
+Copy
+Copied!
+Restart and Verify
+docker compose up -d
+
+Copy
+Copied!
+Migrate Activity Store
+The activity events store uses a separate SQLite database (events.db) to record user and system activity. You can optionally migrate this to PostgreSQL as well.
+
+Create the Activity Database
+docker exec postgres-server psql -U postgres -c "CREATE DATABASE netbird_events;"
+
+Copy
+Copied!
+Create the Activity Migration File
+Create a file called activity-sqlite.load with the following content:
+
+LOAD DATABASE
+     FROM sqlite:///root/combined/backup/events.db
+     INTO postgresql://postgres:password@localhost:5432/netbird_events
+
+WITH include drop, create tables, create indexes, reset sequences
+;
+
+Copy
+Copied!
+No boolean CAST rules are needed for the activity store — all columns use standard integer and text types.
+
+Update the SQLite path and PostgreSQL connection string to match your environment.
+
+Run the Activity Migration
+pgloader activity-sqlite.load
+
+Copy
+Copied!
+Update config.yaml
+Add the activityStore section to your config.yaml:
+
+server:
+  # ... existing settings ...
+
+  activityStore:
+    engine: "postgres"
+    dsn: "host=postgres-server port=5432 user=postgres password=password dbname=netbird_events sslmode=disable"
+
+Copy
+Copied!
+Restart and Verify
+docker compose up -d

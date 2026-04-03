@@ -474,6 +474,7 @@ func (e GroupMinimumIssued) Valid() bool {
 const (
 	IdentityProviderTypeEntra     IdentityProviderType = "entra"
 	IdentityProviderTypeGoogle    IdentityProviderType = "google"
+	IdentityProviderTypeLdap      IdentityProviderType = "ldap"
 	IdentityProviderTypeMicrosoft IdentityProviderType = "microsoft"
 	IdentityProviderTypeOidc      IdentityProviderType = "oidc"
 	IdentityProviderTypeOkta      IdentityProviderType = "okta"
@@ -487,6 +488,8 @@ func (e IdentityProviderType) Valid() bool {
 	case IdentityProviderTypeEntra:
 		return true
 	case IdentityProviderTypeGoogle:
+		return true
+	case IdentityProviderTypeLdap:
 		return true
 	case IdentityProviderTypeMicrosoft:
 		return true
@@ -2066,6 +2069,9 @@ type IdentityProvider struct {
 	// Issuer OIDC issuer URL
 	Issuer string `json:"issuer"`
 
+	// Ldap LDAP connector configuration (only for type "ldap")
+	Ldap *IdentityProviderLDAP `json:"ldap,omitempty"`
+
 	// Name Human-readable name for the identity provider
 	Name string `json:"name"`
 
@@ -2084,11 +2090,74 @@ type IdentityProviderRequest struct {
 	// Issuer OIDC issuer URL
 	Issuer string `json:"issuer"`
 
+	// Ldap LDAP connector configuration (only for type "ldap")
+	Ldap *IdentityProviderLDAP `json:"ldap,omitempty"`
+
 	// Name Human-readable name for the identity provider
 	Name string `json:"name"`
 
 	// Type Type of identity provider
 	Type IdentityProviderType `json:"type"`
+}
+
+// IdentityProviderLDAP defines the LDAP configuration for an identity provider.
+type IdentityProviderLDAP struct {
+	// Host LDAP server host and port (e.g. "ldap.example.com:389")
+	Host string `json:"host"`
+
+	// InsecureNoSSL connect to LDAP without SSL/TLS
+	InsecureNoSSL bool `json:"insecure_no_ssl,omitempty"`
+
+	// InsecureSkipVerify skip TLS certificate verification
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+
+	// StartTLS use StartTLS to upgrade connection
+	StartTLS bool `json:"start_tls,omitempty"`
+
+	// RootCA path to root CA certificate for TLS
+	RootCA string `json:"root_ca,omitempty"`
+
+	// BindDN DN used to bind to the LDAP server
+	BindDN string `json:"bind_dn"`
+
+	// BindPW password for bind DN
+	BindPW string `json:"bind_pw,omitempty"`
+
+	// UserSearchBaseDN base DN for user search
+	UserSearchBaseDN string `json:"user_search_base_dn"`
+
+	// UserSearchFilter LDAP filter for user search
+	UserSearchFilter string `json:"user_search_filter,omitempty"`
+
+	// UserSearchUsername attribute used as username
+	UserSearchUsername string `json:"user_search_username,omitempty"`
+
+	// UserSearchIDAttr attribute used as user ID
+	UserSearchIDAttr string `json:"user_search_id_attr,omitempty"`
+
+	// UserSearchEmailAttr attribute used as email
+	UserSearchEmailAttr string `json:"user_search_email_attr,omitempty"`
+
+	// UserSearchNameAttr attribute used as display name
+	UserSearchNameAttr string `json:"user_search_name_attr,omitempty"`
+
+	// GroupSearchBaseDN base DN for group search
+	GroupSearchBaseDN string `json:"group_search_base_dn,omitempty"`
+
+	// GroupSearchFilter LDAP filter for group search
+	GroupSearchFilter string `json:"group_search_filter,omitempty"`
+
+	// GroupSearchUserAttr user attribute to match against group membership
+	GroupSearchUserAttr string `json:"group_search_user_attr,omitempty"`
+
+	// GroupSearchGroupAttr group attribute containing member references
+	GroupSearchGroupAttr string `json:"group_search_group_attr,omitempty"`
+
+	// GroupSearchNameAttr attribute used as group name
+	GroupSearchNameAttr string `json:"group_search_name_attr,omitempty"`
+
+	// RequiredGroups restricts login to users who are members of at least one of these groups
+	RequiredGroups []string `json:"required_groups,omitempty"`
 }
 
 // IdentityProviderType Type of identity provider
@@ -4165,6 +4234,15 @@ type User struct {
 
 	// Status User's status
 	Status UserStatus `json:"status"`
+
+	// ForcePasswordChange Is true if this user must change their password before accessing the system.
+	ForcePasswordChange bool `json:"force_password_change"`
+
+	// MfaEnabled Is true if this user has MFA (TOTP) enabled.
+	MfaEnabled bool `json:"mfa_enabled"`
+
+	// MfaRequired Is true if this user has MFA enabled but has not yet verified in this session.
+	MfaRequired bool `json:"mfa_required"`
 }
 
 // UserStatus User's status
@@ -4177,6 +4255,10 @@ type UserCreateRequest struct {
 
 	// Email User's Email to send invite to
 	Email *string `json:"email,omitempty"`
+
+	// IdpId Identity provider connector ID for external authentication (e.g. LDAP).
+	// When set, the user is pre-registered for external IDP login.
+	IdpId *string `json:"idp_id,omitempty"`
 
 	// IsServiceUser Is true if this user is a service user
 	IsServiceUser bool `json:"is_service_user"`
@@ -4207,6 +4289,9 @@ type UserInvite struct {
 
 	// Id Invite ID
 	Id string `json:"id"`
+
+	// IdpId Identity provider connector ID (for external IDP pre-registrations)
+	IdpId *string `json:"idp_id,omitempty"`
 
 	// InviteToken The invite link to be shared with the user. Only returned when the invite is created or regenerated.
 	InviteToken *string `json:"invite_token,omitempty"`
@@ -4241,8 +4326,21 @@ type UserInviteCreateRequest struct {
 	// ExpiresIn Invite expiration time in seconds (default 72 hours)
 	ExpiresIn *int `json:"expires_in,omitempty"`
 
+	// IdpId Identity provider connector ID. When set, the user is created in the
+	// external identity provider (e.g. LDAP) and pre-registered for auto-approval.
+	IdpId *string `json:"idp_id,omitempty"`
+
+	// ForcePasswordChange Require the user to change their password on first login.
+	ForcePasswordChange *bool `json:"force_password_change,omitempty"`
+
+	// LdapGroups LDAP group names to add the user to. Groups that don't exist will be created.
+	LdapGroups []string `json:"ldap_groups,omitempty"`
+
 	// Name User's full name
 	Name string `json:"name"`
+
+	// Password User's password. Required when idp_id is set (for creating user in external IDP like LDAP).
+	Password *string `json:"password,omitempty"`
 
 	// Role User's NetBird account role
 	Role string `json:"role"`

@@ -12,7 +12,7 @@ COPY . .
 # Build with version info from git (matching goreleaser ldflags)
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags="-s -w \
-    -X github.com/netbirdio/netbird/version.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev') \
+    -X github.com/netbirdio/netbird/version.version=$(git describe --tags --always 2>/dev/null || echo 'dev') \
     -X main.commit=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown') \
     -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
     -X main.builtBy=docker" \

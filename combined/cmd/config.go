@@ -12,8 +12,10 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 
+	"github.com/netbirdio/netbird/idp/dex"
 	"github.com/netbirdio/netbird/management/server/idp"
 	"github.com/netbirdio/netbird/management/server/types"
 	"github.com/netbirdio/netbird/util"
@@ -131,15 +133,24 @@ type ManagementConfig struct {
 	ReverseProxy            ReverseProxyConfig `yaml:"reverseProxy"`
 }
 
+// AuthConnectorConfig represents a static connector to be loaded on startup.
+type AuthConnectorConfig struct {
+	Type   string                 `yaml:"type"`
+	Name   string                 `yaml:"name"`
+	ID     string                 `yaml:"id"`
+	Config map[string]interface{} `yaml:"config"`
+}
+
 // AuthConfig contains authentication/identity provider settings
 type AuthConfig struct {
-	Issuer                string            `yaml:"issuer"`
-	LocalAuthDisabled     bool              `yaml:"localAuthDisabled"`
-	SignKeyRefreshEnabled bool              `yaml:"signKeyRefreshEnabled"`
-	Storage               AuthStorageConfig `yaml:"storage"`
-	DashboardRedirectURIs []string          `yaml:"dashboardRedirectURIs"`
-	CLIRedirectURIs       []string          `yaml:"cliRedirectURIs"`
-	Owner                 *AuthOwnerConfig  `yaml:"owner,omitempty"`
+	Issuer                string                `yaml:"issuer"`
+	LocalAuthDisabled     bool                  `yaml:"localAuthDisabled"`
+	SignKeyRefreshEnabled bool                  `yaml:"signKeyRefreshEnabled"`
+	Storage               AuthStorageConfig     `yaml:"storage"`
+	DashboardRedirectURIs []string              `yaml:"dashboardRedirectURIs"`
+	CLIRedirectURIs       []string              `yaml:"cliRedirectURIs"`
+	Owner                 *AuthOwnerConfig      `yaml:"owner,omitempty"`
+	Connectors            []AuthConnectorConfig `yaml:"connectors,omitempty"`
 }
 
 // AuthStorageConfig contains auth storage settings
@@ -595,13 +606,43 @@ func (c *CombinedConfig) buildEmbeddedIdPConfig(mgmt ManagementConfig) (*idp.Emb
 	}
 
 	if mgmt.Auth.Owner != nil && mgmt.Auth.Owner.Email != "" {
+		passwordHash, err := ensureBcryptHash(mgmt.Auth.Owner.Password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process owner password: %w", err)
+		}
 		cfg.Owner = &idp.OwnerConfig{
 			Email: mgmt.Auth.Owner.Email,
-			Hash:  mgmt.Auth.Owner.Password,
+			Hash:  passwordHash,
 		}
 	}
 
+	for _, c := range mgmt.Auth.Connectors {
+		cfg.Connectors = append(cfg.Connectors, dex.Connector{
+			Type:   c.Type,
+			Name:   c.Name,
+			ID:     c.ID,
+			Config: c.Config,
+		})
+	}
+
 	return cfg, nil
+}
+
+// ensureBcryptHash returns the input as-is if it's already a bcrypt hash,
+// otherwise hashes it with bcrypt. This allows config files to use either
+// plaintext passwords or pre-hashed bcrypt values.
+func ensureBcryptHash(password string) (string, error) {
+	if password == "" {
+		return "", fmt.Errorf("password cannot be empty")
+	}
+	if strings.HasPrefix(password, "$2a$") || strings.HasPrefix(password, "$2b$") || strings.HasPrefix(password, "$2y$") {
+		return password, nil
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("failed to hash password: %w", err)
+	}
+	return string(hash), nil
 }
 
 // ToManagementConfig converts CombinedConfig to management server config

@@ -9,13 +9,13 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/netbirdio/netbird/management/server/account"
+	nbcontext "github.com/netbirdio/netbird/management/server/context"
+	"github.com/netbirdio/netbird/management/server/mfa"
 	"github.com/netbirdio/netbird/management/server/types"
 	"github.com/netbirdio/netbird/management/server/users"
 	"github.com/netbirdio/netbird/shared/management/http/api"
 	"github.com/netbirdio/netbird/shared/management/http/util"
 	"github.com/netbirdio/netbird/shared/management/status"
-
-	nbcontext "github.com/netbirdio/netbird/management/server/context"
 )
 
 // handler is a handler that returns users of the account
@@ -171,6 +171,11 @@ func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
 		name = *req.Name
 	}
 
+	idpID := ""
+	if req.IdpId != nil {
+		idpID = *req.IdpId
+	}
+
 	newUser, err := h.accountManager.CreateUser(r.Context(), accountID, userID, &types.UserInfo{
 		Email:         email,
 		Name:          name,
@@ -178,6 +183,7 @@ func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
 		AutoGroups:    req.AutoGroups,
 		IsServiceUser: req.IsServiceUser,
 		Issued:        types.UserIssuedAPI,
+		IdPID:         idpID,
 	})
 	if err != nil {
 		util.WriteError(r.Context(), err, w)
@@ -282,7 +288,11 @@ func (h *handler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	util.WriteJSONObject(r.Context(), w, toUserWithPermissionsResponse(user, userAuth.UserId))
+	resp := toUserWithPermissionsResponse(user, userAuth.UserId)
+	if resp.MfaEnabled && !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt) && !mfa.IsOIDCSessionValid(userAuth.UserId) {
+		resp.MfaRequired = true
+	}
+	util.WriteJSONObject(r.Context(), w, resp)
 }
 
 func toUserWithPermissionsResponse(user *users.UserInfoWithPermissions, userID string) *api.User {
@@ -338,20 +348,22 @@ func toUserResponse(user *types.UserInfo, currenUserID string) *api.User {
 	}
 
 	return &api.User{
-		Id:              user.ID,
-		Name:            user.Name,
-		Email:           user.Email,
-		Role:            user.Role,
-		AutoGroups:      autoGroups,
-		Status:          userStatus,
-		IsCurrent:       &isCurrent,
-		IsServiceUser:   &user.IsServiceUser,
-		IsBlocked:       user.IsBlocked,
-		LastLogin:       &user.LastLogin,
-		Issued:          &user.Issued,
-		PendingApproval: user.PendingApproval,
-		Password:        password,
-		IdpId:           idpID,
+		Id:                  user.ID,
+		Name:                user.Name,
+		Email:               user.Email,
+		Role:                user.Role,
+		AutoGroups:          autoGroups,
+		Status:              userStatus,
+		IsCurrent:           &isCurrent,
+		IsServiceUser:       &user.IsServiceUser,
+		IsBlocked:           user.IsBlocked,
+		LastLogin:           &user.LastLogin,
+		Issued:              &user.Issued,
+		PendingApproval:     user.PendingApproval,
+		Password:            password,
+		IdpId:               idpID,
+		ForcePasswordChange: user.ForcePasswordChange,
+		MfaEnabled:          user.MFAEnabled,
 	}
 }
 

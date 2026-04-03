@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -60,6 +61,9 @@ type PKCEAuthProviderConfig struct {
 	LoginFlag common.LoginFlag
 	// LoginHint is used to pre-fill the email/username field during authentication
 	LoginHint string
+	// ManagementURL is the base URL of the management server HTTP API,
+	// used for post-OIDC MFA verification in the PKCE callback.
+	ManagementURL string
 }
 
 // validatePKCEConfig validates PKCE provider configuration
@@ -218,8 +222,52 @@ func (p *PKCEAuthorizationFlow) WaitToken(ctx context.Context, info AuthFlowInfo
 	}
 }
 
+// mfaPendingState holds the OAuth token while waiting for MFA TOTP verification.
+type mfaPendingState struct {
+	mu     sync.Mutex
+	token  *oauth2.Token
+	jwt    string
+	userID string
+}
+
 func (p *PKCEAuthorizationFlow) startServer(server *http.Server, tokenChan chan<- *oauth2.Token, errChan chan<- error) {
+	pending := &mfaPendingState{}
+
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("/mfa-verify", func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		pending.mu.Lock()
+		jwt := pending.jwt
+		userID := pending.userID
+		token := pending.token
+		pending.mu.Unlock()
+
+		if token == nil {
+			renderPKCEFlowTmpl(w, fmt.Errorf("no pending authentication"))
+			return
+		}
+
+		code := req.FormValue("code")
+		if code == "" || len(code) != 6 {
+			renderMFATOTPTmpl(w, "Please enter a valid 6-digit code")
+			return
+		}
+
+		if err := verifyMFACode(p.providerConfig.ManagementURL, jwt, userID, code); err != nil {
+			log.Debugf("MFA verification failed: %v", err)
+			renderMFATOTPTmpl(w, "Invalid code. Please try again.")
+			return
+		}
+
+		renderPKCEFlowTmpl(w, nil)
+		tokenChan <- token
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		cert := p.providerConfig.ClientCertPair
 		if cert != nil {
@@ -240,6 +288,27 @@ func (p *PKCEAuthorizationFlow) startServer(server *http.Server, tokenChan chan<
 			return
 		}
 
+		if p.providerConfig.ManagementURL != "" {
+			jwt := token.AccessToken
+			if p.providerConfig.UseIDToken {
+				if idToken, ok := token.Extra("id_token").(string); ok {
+					jwt = idToken
+				}
+			}
+
+			if user, needed := isMFARequired(p.providerConfig.ManagementURL, jwt); needed {
+				log.Infof("MFA verification required for user %s", user.ID)
+				pending.mu.Lock()
+				pending.token = token
+				pending.jwt = jwt
+				pending.userID = user.ID
+				pending.mu.Unlock()
+
+				renderMFATOTPTmpl(w, "")
+				return
+			}
+		}
+
 		renderPKCEFlowTmpl(w, nil)
 		tokenChan <- token
 	})
@@ -247,6 +316,23 @@ func (p *PKCEAuthorizationFlow) startServer(server *http.Server, tokenChan chan<
 	server.Handler = mux
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errChan <- err
+	}
+}
+
+func renderMFATOTPTmpl(w http.ResponseWriter, errorMsg string) {
+	tmpl, err := template.New("mfa-totp-form").Parse(templates.MFATOTPFormTmpl)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := make(map[string]string)
+	if errorMsg != "" {
+		data["Error"] = errorMsg
+	}
+
+	if err := tmpl.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 

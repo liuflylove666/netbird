@@ -76,6 +76,11 @@ func validateIdentityProviderConfig(ctx context.Context, idpConfig *types.Identi
 		return status.Errorf(status.InvalidArgument, "%s", err.Error())
 	}
 
+	// LDAP connectors don't use OIDC discovery
+	if idpConfig.Type == types.IdentityProviderTypeLDAP {
+		return nil
+	}
+
 	// Validate the issuer by calling the OIDC discovery endpoint
 	if idpConfig.Issuer != "" {
 		if err := validateOIDCIssuer(ctx, idpConfig.Issuer); err != nil {
@@ -248,9 +253,41 @@ func (am *DefaultAccountManager) DeleteIdentityProvider(ctx context.Context, acc
 	return nil
 }
 
+// ListLDAPGroups returns all LDAP group names for the specified LDAP identity provider.
+func (am *DefaultAccountManager) ListLDAPGroups(ctx context.Context, accountID, idpID, userID string) ([]string, error) {
+	ok, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Read)
+	if err != nil {
+		return nil, status.NewPermissionValidationError(err)
+	}
+	if !ok {
+		return nil, status.NewPermissionDeniedError()
+	}
+
+	embeddedManager, ok := am.idpManager.(*idp.EmbeddedIdPManager)
+	if !ok {
+		return nil, status.Errorf(status.Internal, "identity provider management requires embedded IdP")
+	}
+
+	conn, err := embeddedManager.GetConnector(ctx, idpID)
+	if err != nil {
+		return nil, status.Errorf(status.NotFound, "identity provider %q not found", idpID)
+	}
+
+	if conn.Type != "ldap" || conn.LDAP == nil {
+		return nil, status.Errorf(status.InvalidArgument, "identity provider %q is not LDAP type", idpID)
+	}
+
+	groups, err := dex.ListLDAPGroups(conn.LDAP)
+	if err != nil {
+		return nil, status.Errorf(status.Internal, "failed to list LDAP groups: %v", err)
+	}
+
+	return groups, nil
+}
+
 // connectorConfigToIdentityProvider converts a dex.ConnectorConfig to types.IdentityProvider
 func connectorConfigToIdentityProvider(conn *dex.ConnectorConfig, accountID string) *types.IdentityProvider {
-	return &types.IdentityProvider{
+	idp := &types.IdentityProvider{
 		ID:           conn.ID,
 		AccountID:    accountID,
 		Type:         types.IdentityProviderType(conn.Type),
@@ -259,11 +296,33 @@ func connectorConfigToIdentityProvider(conn *dex.ConnectorConfig, accountID stri
 		ClientID:     conn.ClientID,
 		ClientSecret: conn.ClientSecret,
 	}
+	if conn.LDAP != nil {
+		idp.LDAPHost = conn.LDAP.Host
+		idp.LDAPInsecureNoSSL = conn.LDAP.InsecureNoSSL
+		idp.LDAPInsecureSkipVerify = conn.LDAP.InsecureSkipVerify
+		idp.LDAPStartTLS = conn.LDAP.StartTLS
+		idp.LDAPRootCA = conn.LDAP.RootCA
+		idp.LDAPBindDN = conn.LDAP.BindDN
+		idp.LDAPBindPW = conn.LDAP.BindPW
+		idp.LDAPUserSearchBaseDN = conn.LDAP.UserSearchBaseDN
+		idp.LDAPUserSearchFilter = conn.LDAP.UserSearchFilter
+		idp.LDAPUserSearchUsername = conn.LDAP.UserSearchUsername
+		idp.LDAPUserSearchIDAttr = conn.LDAP.UserSearchIDAttr
+		idp.LDAPUserSearchEmailAttr = conn.LDAP.UserSearchEmailAttr
+		idp.LDAPUserSearchNameAttr = conn.LDAP.UserSearchNameAttr
+		idp.LDAPGroupSearchBaseDN = conn.LDAP.GroupSearchBaseDN
+		idp.LDAPGroupSearchFilter = conn.LDAP.GroupSearchFilter
+		idp.LDAPGroupSearchUserAttr = conn.LDAP.GroupSearchUserAttr
+		idp.LDAPGroupSearchGroupAttr = conn.LDAP.GroupSearchGroupAttr
+		idp.LDAPGroupSearchNameAttr = conn.LDAP.GroupSearchNameAttr
+		idp.SetRequiredGroups(conn.LDAP.RequiredGroups)
+	}
+	return idp
 }
 
 // identityProviderToConnectorConfig converts a types.IdentityProvider to dex.ConnectorConfig
 func identityProviderToConnectorConfig(idpConfig *types.IdentityProvider) *dex.ConnectorConfig {
-	return &dex.ConnectorConfig{
+	cfg := &dex.ConnectorConfig{
 		ID:           idpConfig.ID,
 		Name:         idpConfig.Name,
 		Type:         string(idpConfig.Type),
@@ -271,6 +330,30 @@ func identityProviderToConnectorConfig(idpConfig *types.IdentityProvider) *dex.C
 		ClientID:     idpConfig.ClientID,
 		ClientSecret: idpConfig.ClientSecret,
 	}
+	if idpConfig.Type == types.IdentityProviderTypeLDAP {
+		cfg.LDAP = &dex.LDAPConnectorConfig{
+			Host:                 idpConfig.LDAPHost,
+			InsecureNoSSL:        idpConfig.LDAPInsecureNoSSL,
+			InsecureSkipVerify:   idpConfig.LDAPInsecureSkipVerify,
+			StartTLS:             idpConfig.LDAPStartTLS,
+			RootCA:               idpConfig.LDAPRootCA,
+			BindDN:               idpConfig.LDAPBindDN,
+			BindPW:               idpConfig.LDAPBindPW,
+			UserSearchBaseDN:     idpConfig.LDAPUserSearchBaseDN,
+			UserSearchFilter:     idpConfig.LDAPUserSearchFilter,
+			UserSearchUsername:   idpConfig.LDAPUserSearchUsername,
+			UserSearchIDAttr:     idpConfig.LDAPUserSearchIDAttr,
+			UserSearchEmailAttr:  idpConfig.LDAPUserSearchEmailAttr,
+			UserSearchNameAttr:   idpConfig.LDAPUserSearchNameAttr,
+			GroupSearchBaseDN:    idpConfig.LDAPGroupSearchBaseDN,
+			GroupSearchFilter:    idpConfig.LDAPGroupSearchFilter,
+			GroupSearchUserAttr:  idpConfig.LDAPGroupSearchUserAttr,
+			GroupSearchGroupAttr: idpConfig.LDAPGroupSearchGroupAttr,
+			GroupSearchNameAttr:  idpConfig.LDAPGroupSearchNameAttr,
+			RequiredGroups:       idpConfig.GetRequiredGroups(),
+		}
+	}
+	return cfg
 }
 
 // generateIdentityProviderID generates a unique ID for an identity provider.
@@ -296,6 +379,8 @@ func generateIdentityProviderID(idpType types.IdentityProviderType) string {
 		return "authentik-" + id
 	case types.IdentityProviderTypeKeycloak:
 		return "keycloak-" + id
+	case types.IdentityProviderTypeLDAP:
+		return "ldap-" + id
 	default:
 		// Generic OIDC - no prefix
 		return id

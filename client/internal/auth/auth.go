@@ -230,6 +230,7 @@ func (a *Auth) getPKCEFlow(client *mgm.GrpcClient) (*PKCEAuthorizationFlow, erro
 		ClientCertPair:        a.config.ClientCertKeyPair,
 		DisablePromptLogin:    protoConfig.GetDisablePromptLogin(),
 		LoginFlag:             common.LoginFlag(protoConfig.GetLoginFlag()),
+		ManagementURL:         a.mgmURL.String(),
 	}
 
 	if err := validatePKCEConfig(config); err != nil {

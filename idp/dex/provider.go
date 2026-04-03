@@ -194,10 +194,12 @@ func initializeStorage(ctx context.Context, stor storage.Storage, cfg *YAMLConfi
 	return ensureStaticConnectors(ctx, stor, cfg.StaticConnectors)
 }
 
-// ensureStaticPasswords creates or updates static passwords in storage
+// ensureStaticPasswords creates static passwords in storage if they don't already exist.
+// Existing passwords are never overwritten, so that user-initiated password changes
+// (via the API) are preserved across server restarts.
 func ensureStaticPasswords(ctx context.Context, stor storage.Storage, passwords []Password) error {
 	for _, pw := range passwords {
-		existing, err := stor.GetPassword(ctx, pw.Email)
+		_, err := stor.GetPassword(ctx, pw.Email)
 		if errors.Is(err, storage.ErrNotFound) {
 			if err := stor.CreatePassword(ctx, storage.Password(pw)); err != nil {
 				return fmt.Errorf("failed to create password for %s: %w", pw.Email, err)
@@ -206,15 +208,6 @@ func ensureStaticPasswords(ctx context.Context, stor storage.Storage, passwords 
 		}
 		if err != nil {
 			return fmt.Errorf("failed to get password for %s: %w", pw.Email, err)
-		}
-		if string(existing.Hash) != string(pw.Hash) {
-			if err := stor.UpdatePassword(ctx, pw.Email, func(old storage.Password) (storage.Password, error) {
-				old.Hash = pw.Hash
-				old.Username = pw.Username
-				return old, nil
-			}); err != nil {
-				return fmt.Errorf("failed to update password for %s: %w", pw.Email, err)
-			}
 		}
 	}
 	return nil
@@ -588,32 +581,86 @@ func (p *Provider) ListUsers(ctx context.Context) ([]storage.Password, error) {
 
 // UpdateUserPassword updates the password for a user identified by userID.
 // The userID can be either an encoded Dex ID (base64 protobuf) or a raw UUID.
-// It verifies the current password before updating.
+// For local users, it verifies the current password via bcrypt.
+// For LDAP users, it delegates to the LDAP directory.
 func (p *Provider) UpdateUserPassword(ctx context.Context, userID string, oldPassword, newPassword string) error {
-	// Get the user by ID to find their email
+	rawUID, connectorID, err := DecodeDexUserID(userID)
+	if err != nil {
+		rawUID = userID
+		connectorID = ""
+	}
+
+	if connectorID != "" && connectorID != "local" {
+		conn, err := p.GetConnector(ctx, connectorID)
+		if err != nil {
+			return fmt.Errorf("failed to get connector %s: %w", connectorID, err)
+		}
+		if conn.Type == "ldap" && conn.LDAP != nil {
+			return UpdateLDAPUserPassword(conn.LDAP, rawUID, oldPassword, newPassword)
+		}
+		return fmt.Errorf("password change is not supported for connector type %q", conn.Type)
+	}
+
 	user, err := p.GetUserByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Verify old password
 	if err := bcrypt.CompareHashAndPassword(user.Hash, []byte(oldPassword)); err != nil {
 		return fmt.Errorf("current password is incorrect")
 	}
 
-	// Hash the new password
 	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("failed to hash new password: %w", err)
 	}
 
-	// Update the password in storage
 	err = p.storage.UpdatePassword(ctx, user.Email, func(old storage.Password) (storage.Password, error) {
 		old.Hash = newHash
 		return old, nil
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update password: %w", err)
+	}
+
+	return nil
+}
+
+// ResetUserPassword resets a user's password without requiring the old password (admin operation).
+func (p *Provider) ResetUserPassword(ctx context.Context, userID string, newPassword string) error {
+	rawUID, connectorID, err := DecodeDexUserID(userID)
+	if err != nil {
+		rawUID = userID
+		connectorID = ""
+	}
+
+	if connectorID != "" && connectorID != "local" {
+		conn, err := p.GetConnector(ctx, connectorID)
+		if err != nil {
+			return fmt.Errorf("failed to get connector %s: %w", connectorID, err)
+		}
+		if conn.Type == "ldap" && conn.LDAP != nil {
+			return ResetLDAPUserPassword(conn.LDAP, rawUID, newPassword)
+		}
+		return fmt.Errorf("password reset is not supported for connector type %q", conn.Type)
+	}
+
+	user, err := p.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash new password: %w", err)
+	}
+
+	err = p.storage.UpdatePassword(ctx, user.Email, func(old storage.Password) (storage.Password, error) {
+		old.Hash = newHash
+		return old, nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reset password: %w", err)
 	}
 
 	return nil

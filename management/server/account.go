@@ -1224,17 +1224,39 @@ func (am *DefaultAccountManager) addNewUserToDomainAccount(ctx context.Context, 
 	newUser := types.NewRegularUser(userAuth.UserId, userAuth.Email, userAuth.Name)
 	newUser.AccountID = domainAccountID
 
-	settings, err := am.Store.GetAccountSettings(ctx, store.LockingStrengthNone, domainAccountID)
-	if err != nil {
-		return "", err
+	preReg, preRegErr := am.Store.GetUserInviteByEmail(ctx, store.LockingStrengthNone, domainAccountID, userAuth.Email)
+	if preRegErr != nil {
+		if sErr, ok := status.FromError(preRegErr); ok && sErr.Type() == status.NotFound {
+			preReg = nil
+		} else {
+			log.WithContext(ctx).Warnf("failed to check pre-registration for %s: %v", userAuth.Email, preRegErr)
+			preReg = nil
+		}
 	}
 
-	if settings != nil && settings.Extra != nil && settings.Extra.UserApprovalRequired {
-		newUser.Blocked = true
-		newUser.PendingApproval = true
+	if preReg != nil && preReg.IdpID != "" {
+		newUser.Role = types.StrRoleToUserRole(preReg.Role)
+		newUser.AutoGroups = preReg.AutoGroups
+		newUser.Name = preReg.Name
+
+		if err := am.Store.DeleteUserInvite(ctx, preReg.ID); err != nil {
+			log.WithContext(ctx).Warnf("failed to delete pre-registration %s: %v", preReg.ID, err)
+		}
+
+		log.WithContext(ctx).Infof("auto-approved pre-registered external IDP user %s (email: %s, idp: %s)", userAuth.UserId, userAuth.Email, preReg.IdpID)
+	} else {
+		settings, err := am.Store.GetAccountSettings(ctx, store.LockingStrengthNone, domainAccountID)
+		if err != nil {
+			return "", err
+		}
+
+		if settings != nil && settings.Extra != nil && settings.Extra.UserApprovalRequired {
+			newUser.Blocked = true
+			newUser.PendingApproval = true
+		}
 	}
 
-	err = am.Store.SaveUser(ctx, newUser)
+	err := am.Store.SaveUser(ctx, newUser)
 	if err != nil {
 		return "", err
 	}
