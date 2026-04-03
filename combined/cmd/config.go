@@ -617,7 +617,7 @@ func (c *CombinedConfig) buildEmbeddedIdPConfig(mgmt ManagementConfig) (*idp.Emb
 	}
 
 	for _, c := range mgmt.Auth.Connectors {
-		cfg.Connectors = append(cfg.Connectors, dex.Connector{
+		cfg.StaticConnectors = append(cfg.StaticConnectors, dex.Connector{
 			Type:   c.Type,
 			Name:   c.Name,
 			ID:     c.ID,

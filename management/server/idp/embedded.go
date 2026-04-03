@@ -49,8 +49,8 @@ type EmbeddedIdPConfig struct {
 	// Existing local users are preserved and will be able to login again if re-enabled.
 	// Cannot be enabled if no external identity provider connectors are configured.
 	LocalAuthDisabled bool
-	// Connectors are static identity provider connectors loaded from the config file on startup.
-	Connectors []dex.Connector
+	// StaticConnectors are additional connectors to seed during initialization
+	StaticConnectors []dex.Connector
 }
 
 // EmbeddedStorageConfig holds storage configuration for the embedded IdP.
@@ -178,7 +178,7 @@ func (c *EmbeddedIdPConfig) ToYAMLConfig() (*dex.YAMLConfig, error) {
 		}
 	}
 
-	cfg.StaticConnectors = c.Connectors
+	cfg.StaticConnectors = c.StaticConnectors
 
 	return cfg, nil
 }

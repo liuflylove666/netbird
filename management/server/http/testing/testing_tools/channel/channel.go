@@ -114,13 +114,12 @@ func BuildApiBlackBoxWithDBState(t testing_tools.TB, sqlFile string, expectedPee
 	if err != nil {
 		t.Fatalf("Failed to create proxy controller: %v", err)
 	}
-	domainManager.SetClusterCapabilities(serviceProxyController)
-	serviceManager := reverseproxymanager.NewManager(store, am, permissionsManager, serviceProxyController, domainManager)
+	serviceManager := reverseproxymanager.NewManager(store, am, permissionsManager, serviceProxyController, proxyMgr, domainManager)
 	proxyServiceServer.SetServiceManager(serviceManager)
 	am.SetServiceManager(serviceManager)
 
 	// @note this is required so that PAT's validate from store, but JWT's are mocked
-	authManager := serverauth.NewManager(store, "", "", "", "", []string{}, false)
+	authManager := serverauth.NewManager(store, "", "", "", "", []string{}, false, nil)
 	authManagerMock := &serverauth.MockManager{
 		ValidateAndParseTokenFunc:       mockValidateAndParseToken,
 		EnsureUserAccessByJWTGroupsFunc: authManager.EnsureUserAccessByJWTGroups,
@@ -244,13 +243,12 @@ func BuildApiBlackBoxWithDBStateAndPeerChannel(t testing_tools.TB, sqlFile strin
 	if err != nil {
 		t.Fatalf("Failed to create proxy controller: %v", err)
 	}
-	domainManager.SetClusterCapabilities(serviceProxyController)
-	serviceManager := reverseproxymanager.NewManager(store, am, permissionsManager, serviceProxyController, domainManager)
+	serviceManager := reverseproxymanager.NewManager(store, am, permissionsManager, serviceProxyController, proxyMgr, domainManager)
 	proxyServiceServer.SetServiceManager(serviceManager)
 	am.SetServiceManager(serviceManager)
 
 	// @note this is required so that PAT's validate from store, but JWT's are mocked
-	authManager := serverauth.NewManager(store, "", "", "", "", []string{}, false)
+	authManager := serverauth.NewManager(store, "", "", "", "", []string{}, false, nil)
 	authManagerMock := &serverauth.MockManager{
 		ValidateAndParseTokenFunc:       mockValidateAndParseToken,
 		EnsureUserAccessByJWTGroupsFunc: authManager.EnsureUserAccessByJWTGroups,
