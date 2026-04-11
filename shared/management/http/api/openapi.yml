@@ -3432,7 +3432,7 @@ components:
       description: Version information for NetBird components
       properties:
         management_current_version:
-          description: The current running version of the management server
+          description: Current management release (MAJOR.MINOR.PATCH only; git describe / prerelease suffix is stripped for display)
           type: string
           example: "0.35.0"
         dashboard_available_version:

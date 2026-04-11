@@ -10,6 +10,7 @@ import (
 	nbinstance "github.com/netbirdio/netbird/management/server/instance"
 	"github.com/netbirdio/netbird/shared/management/http/api"
 	"github.com/netbirdio/netbird/shared/management/http/util"
+	"github.com/netbirdio/netbird/version"
 )
 
 // handler handles the instance setup HTTP endpoints
@@ -86,7 +87,8 @@ func (h *handler) getVersionInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := api.InstanceVersionInfo{
-		ManagementCurrentVersion:  versionInfo.CurrentVersion,
+		// Sidebar / UI: show release tag only, not git describe (e.g. v0.68.1 not v0.68.1-16-gabc).
+		ManagementCurrentVersion:  version.FormatReleaseVersion(versionInfo.CurrentVersion),
 		ManagementUpdateAvailable: versionInfo.ManagementUpdateAvailable,
 	}
 
