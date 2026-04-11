@@ -14,6 +14,7 @@ import (
 
 	"github.com/netbirdio/netbird/idp/dex"
 	"github.com/netbirdio/netbird/management/server/telemetry"
+	nbjwt "github.com/netbirdio/netbird/shared/auth/jwt"
 )
 
 const (
@@ -200,6 +201,8 @@ type OAuthConfigProvider interface {
 	GetLocalKeysLocation() string
 	GetClientIDs() []string
 	GetUserIDClaim() string
+	// GetKeyFetcher returns JWKS from embedded IdP storage when non-nil; otherwise auth falls back to keysLocation.
+	GetKeyFetcher() nbjwt.KeyFetcher
 	GetTokenEndpoint() string
 	GetDeviceAuthEndpoint() string
 	GetAuthorizationEndpoint() string
@@ -679,6 +682,13 @@ func (m *EmbeddedIdPManager) GetCLIRedirectURLs() []string {
 		return []string{defaultCLIRedirectURL1, defaultCLIRedirectURL2}
 	}
 	return m.config.CLIRedirectURIs
+}
+
+// GetKeyFetcher returns a fetcher that reads JWKS from Dex storage without HTTP.
+func (m *EmbeddedIdPManager) GetKeyFetcher() nbjwt.KeyFetcher {
+	return func(ctx context.Context) (*nbjwt.Jwks, error) {
+		return m.provider.GetJWKS(ctx)
+	}
 }
 
 // GetKeysLocation returns the JWKS endpoint URL for token validation.
