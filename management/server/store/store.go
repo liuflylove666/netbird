@@ -121,7 +121,7 @@ type Store interface {
 	GetAccountGroups(ctx context.Context, lockStrength LockingStrength, accountID string) ([]*types.Group, error)
 	GetResourceGroups(ctx context.Context, lockStrength LockingStrength, accountID, resourceID string) ([]*types.Group, error)
 	GetGroupByID(ctx context.Context, lockStrength LockingStrength, accountID, groupID string) (*types.Group, error)
-	GetGroupByName(ctx context.Context, lockStrength LockingStrength, groupName, accountID string) (*types.Group, error)
+	GetGroupByName(ctx context.Context, lockStrength LockingStrength, accountID, groupName string) (*types.Group, error)
 	GetGroupsByIDs(ctx context.Context, lockStrength LockingStrength, accountID string, groupIDs []string) (map[string]*types.Group, error)
 	CreateGroups(ctx context.Context, accountID string, groups []*types.Group) error
 	UpdateGroups(ctx context.Context, accountID string, groups []*types.Group) error
@@ -447,6 +447,12 @@ func getMigrationsPreAuto(ctx context.Context) []migrationFunc {
 		},
 		func(db *gorm.DB) error {
 			return migration.RemoveDuplicatePeerKeys(ctx, db)
+		},
+		func(db *gorm.DB) error {
+			return migration.CleanupOrphanedResources[rpservice.Service, types.Account](ctx, db, "account_id")
+		},
+		func(db *gorm.DB) error {
+			return migration.CleanupOrphanedResources[domain.Domain, types.Account](ctx, db, "account_id")
 		},
 	}
 }

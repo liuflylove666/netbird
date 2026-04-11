@@ -396,6 +396,11 @@ func (s *SqlStore) DeleteAccount(ctx context.Context, account *types.Account) er
 			return result.Error
 		}
 
+		result = tx.Select(clause.Associations).Delete(account.Services, "account_id = ?", account.Id)
+		if result.Error != nil {
+			return result.Error
+		}
+
 		result = tx.Select(clause.Associations).Delete(account)
 		if result.Error != nil {
 			return result.Error
@@ -2080,7 +2085,8 @@ func (s *SqlStore) getPostureChecks(ctx context.Context, accountID string) ([]*p
 func (s *SqlStore) getServices(ctx context.Context, accountID string) ([]*rpservice.Service, error) {
 	const serviceQuery = `SELECT id, account_id, name, domain, enabled, auth,
 		meta_created_at, meta_certificate_issued_at, meta_status, proxy_cluster,
-		pass_host_header, rewrite_redirects, session_private_key, session_public_key
+		pass_host_header, rewrite_redirects, session_private_key, session_public_key,
+		mode, listen_port, port_auto_assigned, source, source_peer, terminated
 		FROM services WHERE account_id = $1`
 
 	const targetsQuery = `SELECT id, account_id, service_id, path, host, port, protocol,
@@ -2097,6 +2103,9 @@ func (s *SqlStore) getServices(ctx context.Context, accountID string) ([]*rpserv
 		var auth []byte
 		var createdAt, certIssuedAt sql.NullTime
 		var status, proxyCluster, sessionPrivateKey, sessionPublicKey sql.NullString
+		var mode, source, sourcePeer sql.NullString
+		var terminated, portAutoAssigned sql.NullBool
+		var listenPort sql.NullInt64
 		err := row.Scan(
 			&s.ID,
 			&s.AccountID,
@@ -2112,6 +2121,12 @@ func (s *SqlStore) getServices(ctx context.Context, accountID string) ([]*rpserv
 			&s.RewriteRedirects,
 			&sessionPrivateKey,
 			&sessionPublicKey,
+			&mode,
+			&listenPort,
+			&portAutoAssigned,
+			&source,
+			&sourcePeer,
+			&terminated,
 		)
 		if err != nil {
 			return nil, err
@@ -2143,7 +2158,24 @@ func (s *SqlStore) getServices(ctx context.Context, accountID string) ([]*rpserv
 		if sessionPublicKey.Valid {
 			s.SessionPublicKey = sessionPublicKey.String
 		}
-
+		if mode.Valid {
+			s.Mode = mode.String
+		}
+		if source.Valid {
+			s.Source = source.String
+		}
+		if sourcePeer.Valid {
+			s.SourcePeer = sourcePeer.String
+		}
+		if terminated.Valid {
+			s.Terminated = terminated.Bool
+		}
+		if portAutoAssigned.Valid {
+			s.PortAutoAssigned = portAutoAssigned.Bool
+		}
+		if listenPort.Valid {
+			s.ListenPort = uint16(listenPort.Int64)
+		}
 		s.Targets = []*rpservice.Target{}
 		return &s, nil
 	})
