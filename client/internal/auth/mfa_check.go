@@ -13,9 +13,10 @@ import (
 )
 
 type mfaUserInfo struct {
-	ID          string `json:"id"`
-	MFAEnabled  bool   `json:"mfa_enabled"`
-	MFARequired bool   `json:"mfa_required"`
+	ID               string `json:"id"`
+	MFAEnabled       bool   `json:"mfa_enabled"`
+	MFARequired      bool   `json:"mfa_required"`
+	MFASetupRequired bool   `json:"mfa_setup_required"`
 }
 
 func fetchMFAStatus(mgmtBaseURL, jwtToken string) (*mfaUserInfo, error) {
@@ -77,6 +78,9 @@ func isMFARequired(mgmtBaseURL, jwtToken string) (*mfaUserInfo, bool) {
 	if err != nil {
 		log.Debugf("MFA status check skipped: %v", err)
 		return nil, false
+	}
+	if user.MFASetupRequired {
+		log.Warnf("Your administrator requires MFA but you have not set it up yet. Please enable MFA via the NetBird dashboard before connecting.")
 	}
 	return user, user.MFARequired
 }

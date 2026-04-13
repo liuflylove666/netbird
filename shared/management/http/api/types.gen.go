@@ -1453,6 +1453,9 @@ type AccountSettings struct {
 	// LocalAuthDisabled Indicates whether local (email/password) authentication is disabled. When true, users can only authenticate via external identity providers. This is a read-only field.
 	LocalAuthDisabled *bool `json:"local_auth_disabled,omitempty"`
 
+	// MfaRequired Globally requires all users to enable MFA (TOTP). When true, users who have not enabled MFA will be forced to set it up before accessing the system.
+	MfaRequired *bool `json:"mfa_required,omitempty"`
+
 	// NetworkRange Allows to define a custom network range for the account in CIDR format
 	NetworkRange *string `json:"network_range,omitempty"`
 
@@ -4590,6 +4593,9 @@ type User struct {
 
 	// MfaRequired Is true if this user has MFA enabled but has not yet verified in this session.
 	MfaRequired bool `json:"mfa_required"`
+
+	// MfaSetupRequired Is true if the account requires MFA but this user has not yet enabled it.
+	MfaSetupRequired bool `json:"mfa_setup_required"`
 }
 
 // UserStatus User's status

@@ -1,0 +1,500 @@
+"use client";
+
+import Breadcrumbs from "@components/Breadcrumbs";
+import Button from "@components/Button";
+import Card from "@components/Card";
+import HelpText from "@components/HelpText";
+import { Label } from "@components/Label";
+import { notify } from "@components/Notification";
+import Paragraph from "@components/Paragraph";
+import { PeerGroupSelector } from "@components/PeerGroupSelector";
+import Separator from "@components/Separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@components/Tabs";
+import FullScreenLoading from "@components/ui/FullScreenLoading";
+import { RestrictedAccess } from "@components/ui/RestrictedAccess";
+import useRedirect from "@hooks/useRedirect";
+import { IconCirclePlus, IconSettings2 } from "@tabler/icons-react";
+import useFetchApi, { useApiCall } from "@utils/api";
+import { generateColorFromString } from "@utils/helpers";
+import dayjs from "dayjs";
+import {
+  Ban,
+  GalleryHorizontalEnd,
+  History,
+  KeyRoundIcon,
+  Mail,
+  MonitorSmartphoneIcon,
+  ShieldCheck,
+  ShieldOff,
+  User2,
+} from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import React, { useMemo, useState } from "react";
+import { useSWRConfig } from "swr";
+import TeamIcon from "@/assets/icons/TeamIcon";
+import { usePermissions } from "@/contexts/PermissionsProvider";
+import { useLoggedInUser } from "@/contexts/UsersProvider";
+import { useHasChanges } from "@/hooks/useHasChanges";
+import { Group } from "@/interfaces/Group";
+import { Role, User } from "@/interfaces/User";
+import PageContainer from "@/layouts/PageContainer";
+import AccessTokensTable from "@/modules/access-tokens/AccessTokensTable";
+import CreateAccessTokenModal from "@/modules/access-tokens/CreateAccessTokenModal";
+import { useAccount } from "@/modules/account/useAccount";
+import useGroupHelper from "@/modules/groups/useGroupHelper";
+import { useGroupIdsToGroups } from "@/modules/groups/useGroupIdsToGroups";
+import ChangePasswordModal from "@/modules/users/ChangePasswordModal";
+import MFASetupModal from "@/modules/users/MFASetupModal";
+import UserBlockCell from "@/modules/users/table-cells/UserBlockCell";
+import UserStatusCell from "@/modules/users/table-cells/UserStatusCell";
+import { UserPeersSection } from "@/modules/users/UserPeersSection";
+import { UserRoleSelector } from "@/modules/users/UserRoleSelector";
+
+export default function UserPage() {
+  const queryParameter = useSearchParams();
+  const userId = queryParameter.get("id");
+  const { permission } = usePermissions();
+  const isServiceUser = queryParameter.get("service_user") === "true";
+  const { data: users, isLoading } = useFetchApi<User[]>(
+    `/users?service_user=${isServiceUser}`,
+  );
+  const { isOwnerOrAdmin } = useLoggedInUser();
+
+  const user = useMemo(() => {
+    return users?.find((u) => u.id === userId);
+  }, [users, userId]);
+
+  useRedirect("/team/users", false, !userId);
+
+  const userGroups = useGroupIdsToGroups(user?.auto_groups);
+
+  if (!permission.users.read) {
+    return (
+      <PageContainer>
+        <RestrictedAccess page={"User Information"} />
+      </PageContainer>
+    );
+  }
+
+  if (!isOwnerOrAdmin && user && !isLoading) {
+    return <UserOverview user={user} initialGroups={[]} />;
+  }
+
+  if (isOwnerOrAdmin && user && !isLoading && userGroups) {
+    return <UserOverview user={user} initialGroups={userGroups} />;
+  }
+
+  return <FullScreenLoading />;
+}
+
+type Props = {
+  user: User;
+  initialGroups: Group[];
+};
+
+function UserOverview({ user, initialGroups }: Readonly<Props>) {
+  const router = useRouter();
+  const userRequest = useApiCall<User>("/users");
+  const isServiceUser = !!user?.is_service_user;
+  const { mutate } = useSWRConfig();
+  const { loggedInUser, isOwnerOrAdmin, isUser } = useLoggedInUser();
+  const isLoggedInUser = loggedInUser ? loggedInUser?.id === user.id : false;
+  const { permission } = usePermissions();
+
+  const [selectedGroups, setSelectedGroups, { save: saveGroups }] =
+    useGroupHelper({
+      initial: initialGroups,
+    });
+
+  const [role, setRole] = useState(user.role || Role.User);
+  const { hasChanges, updateRef: updateChangesRef } = useHasChanges([
+    role,
+    selectedGroups,
+  ]);
+
+  const save = async () => {
+    const groups = await saveGroups();
+    const groupIds = groups.map((group) => group.id) as string[];
+
+    notify({
+      title: user.name,
+      description: "Changes successfully saved.",
+      promise: userRequest
+        .put(
+          {
+            role: role,
+            auto_groups: groupIds,
+            is_blocked: user.is_blocked,
+          },
+          `/${user.id}`,
+        )
+        .then(() => {
+          mutate(`/users?service_user=${isServiceUser}`);
+          updateChangesRef([role, selectedGroups]);
+        }),
+      loadingMessage: "Saving changes...",
+    });
+  };
+
+  const isProfilePage = !!user?.is_current && !isServiceUser;
+  const canViewTokens = permission?.pats?.read;
+  const canViewPeers = permission?.peers?.read;
+
+  const showAccessTokens = (user?.is_current || isServiceUser) && canViewTokens;
+  const showPeers = !isServiceUser && canViewPeers;
+  const showTabs = isProfilePage && showPeers && showAccessTokens;
+  const showSeparator = !showTabs;
+
+  const [tab, setTab] = useState(isServiceUser ? "access-tokens" : "peers");
+
+  return (
+    <PageContainer>
+      <div className={"p-default py-6 mb-4"}>
+        <Breadcrumbs>
+          <Breadcrumbs.Item
+            href={"/team"}
+            label={"Team"}
+            disabled={!permission.users.read}
+            icon={<TeamIcon size={13} />}
+          />
+
+          {isServiceUser ? (
+            <Breadcrumbs.Item
+              href={"/team/service-users"}
+              label={"Service Users"}
+              icon={<IconSettings2 size={17} />}
+            />
+          ) : (
+            <Breadcrumbs.Item
+              href={"/team/users"}
+              label={"Users"}
+              disabled={!permission.users.read}
+              icon={<User2 size={16} />}
+            />
+          )}
+
+          <Breadcrumbs.Item label={user.name || user.id} active />
+        </Breadcrumbs>
+
+        <div className={"flex justify-between max-w-6xl"}>
+          <div>
+            <div className={"flex items-center gap-3"}>
+              <div
+                className={
+                  "w-10 h-10 rounded-full relative flex items-center justify-center text-white uppercase text-md font-medium bg-nb-gray-900"
+                }
+                style={
+                  isServiceUser
+                    ? {
+                        color: "white",
+                      }
+                    : {
+                        color: user?.name
+                          ? generateColorFromString(
+                              user?.name || user?.id || "System User",
+                            )
+                          : "#808080",
+                      }
+                }
+              >
+                {isServiceUser ? (
+                  <IconSettings2 size={16} />
+                ) : (
+                  user?.name?.charAt(0) || user?.id?.charAt(0)
+                )}
+              </div>
+              <h1 className={"flex items-center gap-3"} title={user?.id}>
+                {user.name || user.id}
+              </h1>
+            </div>
+          </div>
+          {!isUser && (
+            <div className={"flex gap-4"}>
+              <Button
+                variant={"default"}
+                className={"w-full"}
+                onClick={() => {
+                  isServiceUser
+                    ? router.push("/team/service-users")
+                    : router.push("/team/users");
+                }}
+              >
+                Cancel
+              </Button>
+
+              <Button
+                variant={"primary"}
+                className={"w-full"}
+                disabled={!hasChanges || !permission.users.update}
+                onClick={save}
+                data-cy={"save-changes"}
+              >
+                Save Changes
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <div className={"flex gap-10 w-full mt-8 max-w-6xl items-start"}>
+          <UserInformationCard user={user} />
+          <div className={"flex flex-col gap-8 w-1/2 "}>
+            {!isServiceUser && isOwnerOrAdmin && (
+              <div>
+                <Label>Auto-assigned groups</Label>
+                <HelpText>
+                  Groups will be assigned to peers added by this user.
+                </HelpText>
+                <PeerGroupSelector
+                  disabled={isUser}
+                  onChange={setSelectedGroups}
+                  values={selectedGroups}
+                  hideAllGroup={true}
+                  dataCy={"user-group-selector"}
+                />
+              </div>
+            )}
+            <div className={"flex items-start"}>
+              <div className={"w-2/3"}>
+                <Label>User Role</Label>
+                <HelpText>
+                  Set a role for the user to assign access permissions.
+                </HelpText>
+              </div>
+              <div className={"w-1/3"}>
+                <UserRoleSelector
+                  value={role}
+                  onChange={setRole}
+                  hideOwner={isServiceUser}
+                  currentUser={user}
+                  disabled={isLoggedInUser || !permission.users.update}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {showSeparator && <Separator />}
+
+      <Tabs
+        defaultValue={tab}
+        onValueChange={setTab}
+        value={tab}
+        className={"pb-0 mb-0"}
+      >
+        <TabsList justify={"start"} className={"px-8"} hidden={!showTabs}>
+          {showPeers && (
+            <TabsTrigger value={"peers"}>
+              <MonitorSmartphoneIcon size={16} />
+              Peers
+            </TabsTrigger>
+          )}
+          {showAccessTokens && (
+            <TabsTrigger value={"access-tokens"}>
+              <KeyRoundIcon size={16} />
+              Access Tokens
+            </TabsTrigger>
+          )}
+        </TabsList>
+        {showPeers && (
+          <TabsContent value={"peers"} className={"pb-8"}>
+            <UserPeersSection user={user} />
+          </TabsContent>
+        )}
+        {showAccessTokens && (
+          <TabsContent value={"access-tokens"} className={"pb-8"}>
+            <div className={"px-8"}>
+              <div className={"max-w-6xl"}>
+                <div className={"flex justify-between items-center"}>
+                  <div>
+                    <h2>Access Tokens</h2>
+                    <Paragraph>
+                      Access tokens give access to NetBird API.
+                    </Paragraph>
+                  </div>
+                  <div className={"inline-flex gap-4 justify-end"}>
+                    <div>
+                      <CreateAccessTokenModal user={user}>
+                        <Button
+                          variant={"primary"}
+                          data-cy={"access-token-open-modal"}
+                          disabled={!permission.pats.create}
+                        >
+                          <IconCirclePlus size={16} />
+                          Create Access Token
+                        </Button>
+                      </CreateAccessTokenModal>
+                    </div>
+                  </div>
+                </div>
+                <AccessTokensTable user={user} />
+              </div>
+            </div>
+          </TabsContent>
+        )}
+      </Tabs>
+    </PageContainer>
+  );
+}
+
+function UserInformationCard({ user }: Readonly<{ user: User }>) {
+  const isServiceUser = user.is_service_user || false;
+  const neverLoggedIn = dayjs(user.last_login).isBefore(
+    dayjs().subtract(1000, "years"),
+  );
+  const isPendingApproval = user?.pending_approval;
+  const account = useAccount();
+  const embeddedIdpEnabled = account?.settings?.embedded_idp_enabled;
+  const { loggedInUser } = useLoggedInUser();
+  const isAdminOrOwner = loggedInUser?.role === Role.Owner || loggedInUser?.role === Role.Admin;
+  const showChangePassword = !isServiceUser && embeddedIdpEnabled && (user.is_current || isAdminOrOwner);
+
+  return (
+    <Card>
+      <Card.List>
+        <Card.ListItem
+          label={
+            <>
+              <User2 size={16} />
+              {user.name ? "Name" : "User ID"}
+            </>
+          }
+          value={user.name || user.id}
+        />
+
+        {!isServiceUser && (
+          <Card.ListItem
+            label={
+              <>
+                <Mail size={16} />
+                E-Mail
+              </>
+            }
+            value={user.email || "-"}
+          />
+        )}
+
+        <Card.ListItem
+          tooltip={false}
+          label={
+            <>
+              <GalleryHorizontalEnd size={16} />
+              Status
+            </>
+          }
+          value={<UserStatusCell user={user} />}
+        />
+
+        {!isServiceUser && (
+          <>
+            {!user.is_current &&
+              user.role != Role.Owner &&
+              !isPendingApproval && (
+                <Card.ListItem
+                  tooltip={false}
+                  label={
+                    <>
+                      <Ban size={16} />
+                      Block User
+                    </>
+                  }
+                  value={<UserBlockCell user={user} isUserPage={true} />}
+                />
+              )}
+
+            <Card.ListItem
+              label={
+                <>
+                  <History size={16} />
+                  Last login
+                </>
+              }
+              value={
+                neverLoggedIn
+                  ? "Never"
+                  : dayjs(user.last_login).format("D MMMM, YYYY [at] h:mm A") +
+                    " (" +
+                    dayjs().to(user.last_login) +
+                    ")"
+              }
+            />
+
+            {showChangePassword && (
+              <Card.ListItem
+                tooltip={false}
+                label={
+                  <>
+                    <KeyRoundIcon size={16} />
+                    Password
+                  </>
+                }
+                value={
+                  <ChangePasswordModal user={user} isAdminReset={!user.is_current && isAdminOrOwner}>
+                    <Button variant={"secondary"} size={"xs"}>
+                      <KeyRoundIcon size={14} />
+                      {!user.is_current && isAdminOrOwner ? "Reset Password" : "Change Password"}
+                    </Button>
+                  </ChangePasswordModal>
+                }
+              />
+            )}
+            {!isServiceUser && embeddedIdpEnabled && (user.is_current || isAdminOrOwner) && (
+              <Card.ListItem
+                tooltip={false}
+                label={
+                  <>
+                    <ShieldCheck size={16} />
+                    Two-Factor Auth
+                  </>
+                }
+                value={
+                  user.is_current ? (
+                    <MFASetupModal user={user}>
+                      <Button
+                        variant={user.mfa_enabled ? "danger-outline" : "secondary"}
+                        size={"xs"}
+                      >
+                        <ShieldCheck size={14} />
+                        {user.mfa_enabled ? "Disable MFA" : "Enable MFA"}
+                      </Button>
+                    </MFASetupModal>
+                  ) : user.mfa_enabled ? (
+                    <MFAAdminDisableButton userId={user.id} />
+                  ) : (
+                    <span className="text-nb-gray-400 text-xs">Not enabled</span>
+                  )
+                }
+              />
+            )}
+          </>
+        )}
+      </Card.List>
+    </Card>
+  );
+}
+
+function MFAAdminDisableButton({ userId }: Readonly<{ userId: string }>) {
+  const disableRequest = useApiCall<{ mfa_enabled: boolean }>(
+    `/users/${userId}/mfa/disable`,
+  );
+  const { mutate } = useSWRConfig();
+
+  const handleDisable = () => {
+    notify({
+      title: "Disable MFA",
+      description: "Disabling two-factor authentication for this user...",
+      promise: disableRequest.post({}).then(() => {
+        mutate("/users?service_user=false");
+        window.location.reload();
+      }),
+      loadingMessage: "Disabling MFA...",
+    });
+  };
+
+  return (
+    <Button variant={"danger-outline"} size={"xs"} onClick={handleDisable}>
+      <ShieldOff size={14} />
+      Disable MFA
+    </Button>
+  );
+}

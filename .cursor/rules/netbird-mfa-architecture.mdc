@@ -1,0 +1,53 @@
+---
+description: NetBird MFA architecture and global "Require MFA" feature implementation guide
+alwaysApply: true
+---
+
+# NetBird MFA Architecture
+
+## Global "Require MFA" Feature
+
+The platform supports a **global account-level MFA requirement** for embedded IdP users (OpenLDAP + local users).
+
+### Data Model
+
+- `types.Settings.MFARequired` (bool, `gorm:"default:false"`) — stored in DB via GORM AutoMigrate, column `settings_mfa_required`
+- `types.User.MFAEnabled` / `MFASecret` — per-user TOTP state
+- API: `AccountSettings.MfaRequired` (`*bool`, JSON `mfa_required`)
+- API: `User.MfaSetupRequired` (`bool`, JSON `mfa_setup_required`) — set when account requires MFA but user hasn't enabled it
+
+### Enforcement Chain
+
+1. Admin toggles "Require Two-Factor Authentication" in **Settings > Authentication** tab
+2. `PUT /accounts/{id}` saves `MFARequired` to `Settings`
+3. `GET /users/current` checks: if `accountSettings.MFARequired && !user.MFAEnabled` → sets `mfa_setup_required = true`
+4. Dashboard `MFASetupRequiredGuard` (in `DashboardLayout.tsx`) shows a blocking modal forcing MFA setup
+5. After user enables MFA, next OIDC login → `mfagate.Handler` intercepts for TOTP verification
+6. CLI login: `mfa_check.go` logs a warning if `mfa_setup_required` is true
+
+### Key Files
+
+| Layer | File | Purpose |
+|-------|------|---------|
+| Model | `management/server/types/settings.go` | `MFARequired` field on `Settings` |
+| API types | `shared/management/http/api/types.gen.go` | `AccountSettings.MfaRequired`, `User.MfaSetupRequired` |
+| Account handler | `management/server/http/handlers/accounts/accounts_handler.go` | Read/write `MfaRequired` in request/response |
+| User handler | `management/server/http/handlers/users/users_handler.go` | Set `MfaSetupRequired` in `getCurrentUser` |
+| MFA handler | `management/server/http/handlers/users/mfa_handler.go` | setup/enable/disable/verify/status endpoints |
+| MFA gate | `management/server/http/handlers/mfagate/handler.go` | OIDC-level TOTP interception |
+| MFA session | `management/server/mfa/session.go` | In-memory TOTP session management |
+| CLI check | `client/internal/auth/mfa_check.go` | Client-side MFA status check |
+| Frontend model | `dashboard/src/interfaces/Account.ts` | `mfa_required` field |
+| Frontend model | `dashboard/src/interfaces/User.ts` | `mfa_setup_required` field |
+| Settings UI | `dashboard/src/modules/settings/AuthenticationTab.tsx` | Toggle for "Require Two-Factor Authentication" |
+| Layout guard | `dashboard/src/layouts/DashboardLayout.tsx` | `MFASetupRequiredGuard` + `MFAVerificationGuard` |
+| Setup modal | `dashboard/src/modules/users/MFASetupModal.tsx` | QR code setup flow |
+
+### Guard Ordering in DashboardLayout
+
+```
+ForcePasswordChangeGuard
+  → MFASetupRequiredGuard  (forces MFA setup if mfa_setup_required)
+    → MFAVerificationGuard (forces TOTP code if mfa_required)
+      → DashboardPageContent
+```

@@ -215,6 +215,9 @@ func (h *handler) updateAccountRequestSettings(req api.PutApiAccountsAccountIdJS
 	if req.Settings.LazyConnectionEnabled != nil {
 		returnSettings.LazyConnectionEnabled = *req.Settings.LazyConnectionEnabled
 	}
+	if req.Settings.MfaRequired != nil {
+		returnSettings.MFARequired = *req.Settings.MfaRequired
+	}
 	if req.Settings.AutoUpdateVersion != nil {
 		_, err := goversion.NewSemver(*req.Settings.AutoUpdateVersion)
 		if *req.Settings.AutoUpdateVersion == autoUpdateLatestVersion ||
@@ -352,6 +355,7 @@ func toAccountResponse(accountID string, settings *types.Settings, meta *types.A
 		DnsDomain:                       &settings.DNSDomain,
 		AutoUpdateVersion:               &settings.AutoUpdateVersion,
 		AutoUpdateAlways:                &settings.AutoUpdateAlways,
+		MfaRequired:                     &settings.MFARequired,
 		EmbeddedIdpEnabled:              &settings.EmbeddedIdpEnabled,
 		LocalAuthDisabled:               &settings.LocalAuthDisabled,
 	}

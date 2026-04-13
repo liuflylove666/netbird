@@ -65,6 +65,10 @@ type Settings struct {
 	// when false, updates require user interaction from the UI
 	AutoUpdateAlways bool `gorm:"default:false"`
 
+	// MFARequired globally requires all users to enable MFA (TOTP).
+	// When true, users who have not enabled MFA will be forced to set it up before accessing the system.
+	MFARequired bool `gorm:"default:false"`
+
 	// EmbeddedIdpEnabled indicates if the embedded identity provider is enabled.
 	// This is a runtime-only field, not stored in the database.
 	EmbeddedIdpEnabled bool `gorm:"-"`
@@ -96,6 +100,7 @@ func (s *Settings) Copy() *Settings {
 		NetworkRange:                    s.NetworkRange,
 		AutoUpdateVersion:               s.AutoUpdateVersion,
 		AutoUpdateAlways:                s.AutoUpdateAlways,
+		MFARequired:                     s.MFARequired,
 		EmbeddedIdpEnabled:              s.EmbeddedIdpEnabled,
 		LocalAuthDisabled:               s.LocalAuthDisabled,
 	}

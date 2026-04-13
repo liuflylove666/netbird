@@ -11,6 +11,7 @@ import (
 	"github.com/netbirdio/netbird/management/server/account"
 	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/mfa"
+	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/types"
 	"github.com/netbirdio/netbird/management/server/users"
 	"github.com/netbirdio/netbird/shared/management/http/api"
@@ -292,6 +293,12 @@ func (h *handler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 	if resp.MfaEnabled && !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt) && !mfa.IsOIDCSessionValid(userAuth.UserId) {
 		resp.MfaRequired = true
 	}
+
+	accountSettings, err := h.accountManager.GetStore().GetAccountSettings(ctx, store.LockingStrengthNone, userAuth.AccountId)
+	if err == nil && accountSettings.MFARequired && !resp.MfaEnabled {
+		resp.MfaSetupRequired = true
+	}
+
 	util.WriteJSONObject(r.Context(), w, resp)
 }
 
