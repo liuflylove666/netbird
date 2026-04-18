@@ -107,6 +107,31 @@ export NETBIRD_DOMAIN=netbird.example.com; curl -fsSL https://github.com/netbird
 ```
 - Once finished, you can manage the resources via `docker-compose`
 
+#### Self-hosted client downloads (optional)
+
+You can serve client installers from your **management HTTP** endpoint under `/downloads/` so the dashboard install wizard uses your server instead of `pkgs.netbird.io`, keeping client and server versions aligned.
+
+1. **Sync artifacts** on the host (requires outbound HTTPS). From the repository root:
+
+   ```bash
+   chmod +x deploy/sync-client-downloads.sh
+   ./deploy/sync-client-downloads.sh ./deploy/client-downloads
+   ```
+
+   To pin a version (recommended to match your deployment):
+
+   ```bash
+   NETBIRD_CLIENT_VERSION=0.68.1 ./deploy/sync-client-downloads.sh ./deploy/client-downloads
+   ```
+
+   The script mirrors paths from `pkgs.netbird.io` and optionally fetches extra desktop assets from [netbirdio/netbird](https://github.com/netbirdio/netbird) GitHub Releases. **Android and iOS are not on that release** (the Android app ships from [netbirdio/android-client](https://github.com/netbirdio/android-client) with its own version). To populate `android/netbird.apk`, set e.g. `NETBIRD_ANDROID_CLIENT_VERSION=0.4.1` or `NETBIRD_ANDROID_APK_URL=…`; for `ios/netbird.ipa` use `NETBIRD_IOS_IPA_URL=…` if you host an IPA.
+
+2. **Wire Docker** — in `deploy/docker-compose.yml` on the `netbird-server` service, add a read-only mount and set `NB_CLIENT_DOWNLOADS_DIR` (see commented examples in that file), then run `docker compose up -d --build` again.
+
+3. **Dashboard** — open **Settings → Clients** and enable **Use management server for install downloads**.
+
+Full script behavior and layout are documented in `deploy/sync-client-downloads.sh`. A full Debian `apt` mirror is not included (large); use the official `pkgs` repo for `apt` or mirror `dists/`/`pool/` separately if you need offline `apt`.
+
 ### A bit on NetBird internals
 -  Every machine in the network runs [NetBird Agent (or Client)](client/) that manages WireGuard.
 -  Every agent connects to [Management Service](management/) that holds network state, manages peer IPs, and distributes network updates to agents (peers).

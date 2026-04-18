@@ -17,13 +17,20 @@ import ShellIcon from "@/assets/icons/ShellIcon";
 import WindowsIcon from "@/assets/icons/WindowsIcon";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import useOperatingSystem from "@/hooks/useOperatingSystem";
+import { VersionInfo } from "@/interfaces/Instance";
 import { OperatingSystem } from "@/interfaces/OperatingSystem";
+import { useAccount } from "@/modules/account/useAccount";
 import AndroidTab from "@/modules/setup-netbird-modal/AndroidTab";
 import DockerTab from "@/modules/setup-netbird-modal/DockerTab";
 import IOSTab from "@/modules/setup-netbird-modal/IOSTab";
 import LinuxTab from "@/modules/setup-netbird-modal/LinuxTab";
 import MacOSTab from "@/modules/setup-netbird-modal/MacOSTab";
 import WindowsTab from "@/modules/setup-netbird-modal/WindowsTab";
+import useFetchApi from "@utils/api";
+import {
+  getClientPkgsBaseUrl,
+  getDockerClientImage,
+} from "@utils/clientDownloads";
 
 type OidcUserInfo = {
   given_name?: string;
@@ -82,6 +89,17 @@ export function SetupModalContent({
   const [isFirstRun] = useLocalStorage<boolean>("netbird-first-run", true);
   const pathname = usePathname();
   const isInstallPage = pathname === "/install";
+  const account = useAccount();
+  const { data: versionInfo } = useFetchApi<VersionInfo>(
+    "/instance/version",
+    true,
+    false,
+  );
+  const pkgsBase = useMemo(() => getClientPkgsBaseUrl(account), [account]);
+  const dockerClientImage = useMemo(
+    () => getDockerClientImage(versionInfo?.management_current_version),
+    [versionInfo?.management_current_version],
+  );
 
   const titleMessage = useMemo(() => {
     if (title) return title;
@@ -185,22 +203,25 @@ export function SetupModalContent({
           setupKey={setupKey}
           showSetupKeyInfo={showOnlyRoutingPeerOS}
           hostname={hostname}
+          pkgsBase={pkgsBase}
         />
         <WindowsTab
           setupKey={setupKey}
           showSetupKeyInfo={showOnlyRoutingPeerOS}
           hostname={hostname}
+          pkgsBase={pkgsBase}
         />
         <MacOSTab
           setupKey={setupKey}
           showSetupKeyInfo={showOnlyRoutingPeerOS}
           hostname={hostname}
+          pkgsBase={pkgsBase}
         />
 
         {!setupKey && (
           <>
-            <AndroidTab />
-            <IOSTab />
+            <AndroidTab pkgsBase={pkgsBase} />
+            <IOSTab pkgsBase={pkgsBase} />
           </>
         )}
 
@@ -209,6 +230,7 @@ export function SetupModalContent({
             setupKey={setupKey}
             showSetupKeyInfo={showOnlyRoutingPeerOS}
             hostname={hostname}
+            dockerClientImage={dockerClientImage}
           />
         )}
       </Tabs>

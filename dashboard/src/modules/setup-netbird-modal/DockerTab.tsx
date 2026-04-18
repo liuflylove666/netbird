@@ -15,12 +15,14 @@ type Props = {
   setupKey?: string;
   showSetupKeyInfo?: boolean;
   hostname?: string;
+  dockerClientImage: string;
 };
 
 export default function DockerTab({
   setupKey,
   showSetupKeyInfo = false,
   hostname,
+  dockerClientImage,
 }: Readonly<Props>) {
   return (
     <TabsContent value={String(OperatingSystem.DOCKER)}>
@@ -78,7 +80,7 @@ export default function DockerTab({
                   <span className={"text-netbird"}>{GRPC_API_ORIGIN}</span> \
                 </Code.Line>
               )}
-              <Code.Line> netbirdio/netbird:latest</Code.Line>
+              <Code.Line> {dockerClientImage}</Code.Line>
             </Code>
           </Steps.Step>
           <Steps.Step step={3} line={false}>

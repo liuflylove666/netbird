@@ -33,3 +33,6 @@ infrastructure_files/setup-*.env
 vendor/
 /netbird
 client/netbird-electron/
+# Mirrored client installers (see deploy/sync-client-downloads.sh); do not commit binaries
+deploy/client-downloads/*
+!deploy/client-downloads/.gitkeep

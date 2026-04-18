@@ -367,6 +367,10 @@ components:
           description: When true, updates are installed automatically in the background. When false, updates require user interaction from the UI.
           type: boolean
           example: false
+        client_downloads_use_management_server:
+          description: When true, the dashboard installation UI uses this management server under /downloads/ instead of pkgs.netbird.io. Requires the server process to be started with NB_CLIENT_DOWNLOADS_DIR pointing at a directory that mirrors the needed paths (install.sh, windows/, macos/, debian/, etc.).
+          type: boolean
+          example: false
         embedded_idp_enabled:
           description: Indicates whether the embedded identity provider (Dex) is enabled for this account. This is a read-only field.
           type: boolean

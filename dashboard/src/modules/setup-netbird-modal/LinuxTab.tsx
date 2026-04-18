@@ -23,12 +23,14 @@ type Props = {
   setupKey?: string;
   showSetupKeyInfo?: boolean;
   hostname?: string;
+  pkgsBase: string;
 };
 
 export default function LinuxTab({
   setupKey,
   showSetupKeyInfo = false,
   hostname,
+  pkgsBase,
 }: Readonly<Props>) {
   return (
     <TabsContent value={String(OperatingSystem.LINUX)}>
@@ -39,7 +41,9 @@ export default function LinuxTab({
         </p>
         <Steps>
           <Steps.Step step={1}>
-            <Code>curl -fsSL https://pkgs.netbird.io/install.sh | sh</Code>
+            <Code>
+              curl -fsSL {pkgsBase}/install.sh | sh
+            </Code>
           </Steps.Step>
           <Steps.Step step={2} line={false}>
             <p>
@@ -74,12 +78,12 @@ export default function LinuxTab({
                       sudo apt install ca-certificates curl gnupg -y
                     </Code.Line>
                     <Code.Line>
-                      curl -sSL https://pkgs.netbird.io/debian/public.key | sudo
-                      gpg --dearmor --output
+                      curl -sSL {pkgsBase}/debian/public.key | sudo gpg
+                      --dearmor --output
                       /usr/share/keyrings/netbird-archive-keyring.gpg
                     </Code.Line>
                     <Code.Line>
-                      {`echo 'deb [signed-by=/usr/share/keyrings/netbird-archive-keyring.gpg] https://pkgs.netbird.io/debian stable main' | sudo tee /etc/apt/sources.list.d/netbird.list`}
+                      {`echo 'deb [signed-by=/usr/share/keyrings/netbird-archive-keyring.gpg] ${pkgsBase}/debian stable main' | sudo tee /etc/apt/sources.list.d/netbird.list`}
                     </Code.Line>
                   </Code>
                 </Steps.Step>

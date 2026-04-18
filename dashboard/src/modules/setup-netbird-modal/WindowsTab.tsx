@@ -6,7 +6,7 @@ import TabsContentPadding, { TabsContent } from "@components/Tabs";
 import { getNetBirdUpCommand, GRPC_API_ORIGIN } from "@utils/netbird";
 import { DownloadIcon, PackageOpenIcon } from "lucide-react";
 import Link from "next/link";
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { OperatingSystem } from "@/interfaces/OperatingSystem";
 import {
   HostnameParameter,
@@ -18,16 +18,31 @@ type Props = {
   setupKey?: string;
   showSetupKeyInfo?: boolean;
   hostname?: string;
+  pkgsBase: string;
 };
 
 export default function WindowsTab({
   setupKey,
   showSetupKeyInfo,
   hostname,
+  pkgsBase,
 }: Readonly<Props>) {
-  const [windowsUrl, setWindowsUrl] = useState(
-    "https://pkgs.netbird.io/windows/x64",
+  const windowsOptions = useMemo(
+    () => [
+      { label: "64-Bit", value: `${pkgsBase}/windows/x64` },
+      { label: "ARM64", value: `${pkgsBase}/windows/arm64` },
+      { label: "64-Bit (MSI)", value: `${pkgsBase}/windows/msi/x64` },
+      { label: "ARM64 (MSI)", value: `${pkgsBase}/windows/msi/arm64` },
+    ],
+    [pkgsBase],
   );
+
+  const [windowsUrl, setWindowsUrl] = useState(windowsOptions[0].value);
+
+  useEffect(() => {
+    setWindowsUrl(`${pkgsBase}/windows/x64`);
+  }, [pkgsBase]);
+
   return (
     <TabsContent value={String(OperatingSystem.WINDOWS)}>
       <TabsContentPadding>
@@ -44,31 +59,9 @@ export default function WindowsTab({
                 className={"w-[170px]"}
                 onChange={setWindowsUrl}
                 placeholder={"Select architecture"}
-                options={[
-                  {
-                    label: "64-Bit",
-                    value: "https://pkgs.netbird.io/windows/x64",
-                  },
-                  {
-                    label: "ARM64",
-                    value: "https://pkgs.netbird.io/windows/arm64",
-                  },
-                  {
-                    label: "64-Bit (MSI)",
-                    value: "https://pkgs.netbird.io/windows/msi/x64",
-                  },
-                  {
-                    label: "ARM64 (MSI)",
-                    value: "https://pkgs.netbird.io/windows/msi/arm64",
-                  },
-                ]}
+                options={windowsOptions}
               />
-              <Link
-                href={windowsUrl}
-                passHref
-                target={"_blank"}
-                rel="noopener noreferrer"
-              >
+              <Link href={windowsUrl} passHref>
                 <Button variant={"primary"}>
                   <DownloadIcon size={14} />
                   Download NetBird

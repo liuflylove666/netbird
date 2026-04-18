@@ -28,6 +28,8 @@ export interface Account {
     embedded_idp_enabled?: boolean;
     auto_update_version: string;
     auto_update_always: boolean;
+    /** When true, install UI uses management server /downloads/ instead of pkgs.netbird.io */
+    client_downloads_use_management_server?: boolean;
     local_auth_disabled?: boolean;
   };
   onboarding?: AccountOnboarding;

@@ -231,6 +231,9 @@ func (h *handler) updateAccountRequestSettings(req api.PutApiAccountsAccountIdJS
 	if req.Settings.AutoUpdateAlways != nil {
 		returnSettings.AutoUpdateAlways = *req.Settings.AutoUpdateAlways
 	}
+	if req.Settings.ClientDownloadsUseManagementServer != nil {
+		returnSettings.ClientDownloadsUseManagementServer = *req.Settings.ClientDownloadsUseManagementServer
+	}
 
 	return returnSettings, nil
 }
@@ -355,9 +358,10 @@ func toAccountResponse(accountID string, settings *types.Settings, meta *types.A
 		DnsDomain:                       &settings.DNSDomain,
 		AutoUpdateVersion:               &settings.AutoUpdateVersion,
 		AutoUpdateAlways:                &settings.AutoUpdateAlways,
-		MfaRequired:                     &settings.MFARequired,
-		EmbeddedIdpEnabled:              &settings.EmbeddedIdpEnabled,
-		LocalAuthDisabled:               &settings.LocalAuthDisabled,
+		MfaRequired:                        &settings.MFARequired,
+		ClientDownloadsUseManagementServer: &settings.ClientDownloadsUseManagementServer,
+		EmbeddedIdpEnabled:                 &settings.EmbeddedIdpEnabled,
+		LocalAuthDisabled:                  &settings.LocalAuthDisabled,
 	}
 
 	if settings.NetworkRange.IsValid() {

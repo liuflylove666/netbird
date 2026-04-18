@@ -69,6 +69,10 @@ type Settings struct {
 	// When true, users who have not enabled MFA will be forced to set it up before accessing the system.
 	MFARequired bool `gorm:"default:false"`
 
+	// ClientDownloadsUseManagementServer when true, the dashboard install instructions use
+	// the management HTTP origin under /downloads/ instead of pkgs.netbird.io (requires NB_CLIENT_DOWNLOADS_DIR on the server).
+	ClientDownloadsUseManagementServer bool `gorm:"default:false"`
+
 	// EmbeddedIdpEnabled indicates if the embedded identity provider is enabled.
 	// This is a runtime-only field, not stored in the database.
 	EmbeddedIdpEnabled bool `gorm:"-"`
@@ -99,9 +103,10 @@ func (s *Settings) Copy() *Settings {
 		DNSDomain:                       s.DNSDomain,
 		NetworkRange:                    s.NetworkRange,
 		AutoUpdateVersion:               s.AutoUpdateVersion,
-		AutoUpdateAlways:                s.AutoUpdateAlways,
-		MFARequired:                     s.MFARequired,
-		EmbeddedIdpEnabled:              s.EmbeddedIdpEnabled,
+		AutoUpdateAlways:                   s.AutoUpdateAlways,
+		MFARequired:                        s.MFARequired,
+		ClientDownloadsUseManagementServer: s.ClientDownloadsUseManagementServer,
+		EmbeddedIdpEnabled:                 s.EmbeddedIdpEnabled,
 		LocalAuthDisabled:               s.LocalAuthDisabled,
 	}
 	if s.Extra != nil {

@@ -50,7 +50,10 @@ services:
       - ./config.yaml:/etc/netbird/config.yaml
       - ./GeoLite2-City.mmdb:/var/lib/netbird/GeoLite2-City_local.mmdb:ro
       - ./geonames_local.db:/var/lib/netbird/geonames_local.db:ro
+      # After: ./deploy/sync-client-downloads.sh ./deploy/client-downloads
+      # - ./client-downloads:/var/lib/netbird/downloads:ro
     environment:
+      # With the mount above: NB_CLIENT_DOWNLOADS_DIR: /var/lib/netbird/downloads
       NB_EXPERIMENT_NETWORK_MAP: "false"
       NB_PEER_UPDATE_INTERVAL_MS: "1"
       NB_PEER_UPDATE_STARTUP_PERIOD_S: "1"

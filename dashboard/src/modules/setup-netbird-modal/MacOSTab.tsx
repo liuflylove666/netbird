@@ -30,11 +30,13 @@ type Props = {
   setupKey?: string;
   showSetupKeyInfo?: boolean;
   hostname?: string;
+  pkgsBase: string;
 };
 export default function MacOSTab({
   setupKey,
   showSetupKeyInfo,
   hostname,
+  pkgsBase,
 }: Readonly<Props>) {
   return (
     <TabsContent value={String(OperatingSystem.APPLE)}>
@@ -50,9 +52,8 @@ export default function MacOSTab({
             </div>
             <div className={"flex gap-4 mt-1 flex-wrap"}>
               <Link
-                href={"https://pkgs.netbird.io/macos/universal"}
+                href={`${pkgsBase}/macos/universal`}
                 passHref
-                target={"_blank"}
               >
                 <Button variant={"primary"}>
                   <DownloadIcon size={14} />

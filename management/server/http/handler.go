@@ -43,6 +43,7 @@ import (
 	"github.com/netbirdio/netbird/management/server/auth"
 	"github.com/netbirdio/netbird/management/server/geolocation"
 	nbgroups "github.com/netbirdio/netbird/management/server/groups"
+	"github.com/netbirdio/netbird/management/server/http/downloads"
 	"github.com/netbirdio/netbird/management/server/http/handlers/accounts"
 	"github.com/netbirdio/netbird/management/server/http/handlers/dns"
 	"github.com/netbirdio/netbird/management/server/http/handlers/events"
@@ -190,6 +191,8 @@ func NewAPIHandler(ctx context.Context, accountManager account.Manager, networks
 		mfaGate := mfagate.New(dexHandler, embeddedIdP.DexStorage(), accountManager.GetStore())
 		rootRouter.PathPrefix("/oauth2").Handler(mfaGate)
 	}
+
+	downloads.Register(rootRouter, corsMiddleware)
 
 	return rootRouter, nil
 }

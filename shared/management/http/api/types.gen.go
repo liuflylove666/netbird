@@ -1455,6 +1455,9 @@ type AccountSettings struct {
 	// AutoUpdateVersion Set Clients auto-update version. "latest", "disabled", or a specific version (e.g "0.50.1")
 	AutoUpdateVersion *string `json:"auto_update_version,omitempty"`
 
+	// ClientDownloadsUseManagementServer When true, the dashboard installation UI uses this management server under /downloads/ instead of pkgs.netbird.io. Requires the server process to be started with NB_CLIENT_DOWNLOADS_DIR pointing at a directory that mirrors the needed paths (install.sh, windows/, macos/, debian/, etc.).
+	ClientDownloadsUseManagementServer *bool `json:"client_downloads_use_management_server,omitempty"`
+
 	// DnsDomain Allows to define a custom dns domain for the account
 	DnsDomain *string `json:"dns_domain,omitempty"`
 

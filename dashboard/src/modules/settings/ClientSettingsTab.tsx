@@ -18,6 +18,7 @@ import { useApiCall } from "@utils/api";
 import { cn, validator } from "@utils/helpers";
 import {
   ClockFadingIcon,
+  DownloadIcon,
   ExternalLinkIcon,
   FlaskConicalIcon,
   MonitorSmartphoneIcon,
@@ -93,6 +94,9 @@ function ClientSettingsTabContent({ account }: Readonly<Props>) {
   const [peerExposeEnabled, setPeerExposeEnabled] = useState<boolean>(
     account?.settings?.peer_expose_enabled ?? false,
   );
+  const [clientDownloadsUseServer, setClientDownloadsUseServer] = useState(
+    account.settings?.client_downloads_use_management_server ?? false,
+  );
   const [peerExposeGroups, setPeerExposeGroups, { save: saveGroups }] =
     useGroupHelper({
       initial: account.settings?.peer_expose_groups,
@@ -108,6 +112,7 @@ function ClientSettingsTabContent({ account }: Readonly<Props>) {
     autoUpdateAlways,
     peerExposeEnabled,
     peerExposeGroupNames,
+    clientDownloadsUseServer,
   ]);
 
   const handleUpdateMethodChange = (value: string) => {
@@ -165,6 +170,7 @@ function ClientSettingsTabContent({ account }: Readonly<Props>) {
             auto_update_always: autoUpdateAlways,
             peer_expose_enabled: peerExposeEnabled,
             peer_expose_groups: peerExposeGroupIds,
+            client_downloads_use_management_server: clientDownloadsUseServer,
           },
         })
         .then(() => {
@@ -175,6 +181,7 @@ function ClientSettingsTabContent({ account }: Readonly<Props>) {
             autoUpdateAlways,
             peerExposeEnabled,
             peerExposeGroupNames,
+            clientDownloadsUseServer,
           ]);
         }),
       loadingMessage: "Updating client settings...",
@@ -232,6 +239,44 @@ function ClientSettingsTabContent({ account }: Readonly<Props>) {
         </div>
 
         <div className={"flex flex-col gap-10 w-full mt-8"}>
+          <div className={"flex flex-col relative"}>
+            <Label>
+              <DownloadIcon size={15} />
+              Client install downloads
+            </Label>
+            <HelpText>
+              By default the dashboard points users to official NetBird packages
+              (pkgs.netbird.io). Enable this to serve the same paths from your
+              management server at{" "}
+              <span className={"text-white font-medium"}>
+                {"{management URL}/downloads/"}
+              </span>
+              . Set the{" "}
+              <span className={"text-white font-medium"}>
+                NB_CLIENT_DOWNLOADS_DIR
+              </span>{" "}
+              environment variable on the management process to a directory
+              containing mirrored files (for example{" "}
+              <span className={"text-white font-medium"}>install.sh</span>,{" "}
+              <span className={"text-white font-medium"}>windows/</span>,{" "}
+              <span className={"text-white font-medium"}>macos/</span>,{" "}
+              <span className={"text-white font-medium"}>debian/</span>,{" "}
+              <span className={"text-white font-medium"}>android/</span>,{" "}
+              <span className={"text-white font-medium"}>ios/</span>
+              ) so client versions stay aligned with your deployment.
+            </HelpText>
+            <FancyToggleSwitch
+              className={"mt-2"}
+              value={clientDownloadsUseServer}
+              onChange={setClientDownloadsUseServer}
+              label={"Use management server for install downloads"}
+              helpText={
+                "Requires NB_CLIENT_DOWNLOADS_DIR on the server and HTTPS access to the management API URL from user browsers."
+              }
+              disabled={!permission.settings.update}
+            />
+          </div>
+
           <div className={"flex flex-col relative"}>
             <Label>
               <RefreshCcw size={15} />
