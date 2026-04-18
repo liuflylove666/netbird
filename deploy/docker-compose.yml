@@ -39,6 +39,9 @@ services:
     build:
       context: ../
       dockerfile: combined/Dockerfile.multistage
+      # When main lags GitHub Latest release, pin the reported version (must match combined/Dockerfile.multistage ARG NB_VERSION):
+      # args:
+      #   NB_VERSION: v0.68.3
     image: netbird-server:dev
     container_name: netbird-server
     restart: unless-stopped

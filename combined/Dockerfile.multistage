@@ -9,10 +9,16 @@ RUN go mod download
 
 COPY . .
 
-# Build with version info from git (matching goreleaser ldflags)
-RUN CGO_ENABLED=1 GOOS=linux go build \
+# Version string embedded in the binary (dashboard/API "management version").
+# Default: nearest tag from `git describe` on this checkout (main often shows
+# e.g. 0.68.2 while GitHub "Latest release" is already 0.68.3 until main catches up).
+# Override at build time, e.g. docker compose build --build-arg NB_VERSION=v0.68.3
+ARG NB_VERSION=
+RUN VERSION="${NB_VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)}" && \
+    echo "netbird-server version=${VERSION}" && \
+    CGO_ENABLED=1 GOOS=linux go build \
     -ldflags="-s -w \
-    -X github.com/netbirdio/netbird/version.version=$(git describe --tags --always 2>/dev/null || echo 'dev') \
+    -X github.com/netbirdio/netbird/version.version=${VERSION} \
     -X main.commit=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown') \
     -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
     -X main.builtBy=docker" \

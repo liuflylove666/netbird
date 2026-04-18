@@ -99,6 +99,9 @@ services:
     build:
       context: ../
       dockerfile: combined/Dockerfile.multistage
+      # Pin binary/dashboard version string when git describe lags Latest release (see combined/Dockerfile.multistage):
+      # args:
+      #   NB_VERSION: v0.68.3
     image: netbird-server:${NETBIRD_VERSION:-latest}
     container_name: netbird-server
     restart: always
