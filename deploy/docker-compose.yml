@@ -70,6 +70,42 @@ services:
         max-size: "500m"
         max-file: "2"
 
+  # Routing peer running inside docker-compose.
+  # Usage:
+  #   1. cp peer.env.example peer.env
+  #   2. Edit peer.env and set NB_SETUP_KEY (create one in the dashboard)
+  #   3. docker compose --profile peer up -d --build netbird-router
+  # netbird-router:
+  #   build:
+  #     context: ../
+  #     dockerfile: client/Dockerfile.multistage
+  #   image: netbird-client:dev
+  #   container_name: netbird-router
+  #   restart: unless-stopped
+  #   networks: [netbird]
+  #   profiles: [peer]
+  #   env_file:
+  #     - ./peer.env
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   devices:
+  #     - /dev/net/tun:/dev/net/tun
+  #   sysctls:
+  #     net.ipv4.ip_forward: "1"
+  #     net.ipv4.conf.all.src_valid_mark: "1"
+  #   volumes:
+  #     - netbird_router_data:/var/lib/netbird
+  #   depends_on:
+  #     netbird-server:
+  #       condition: service_started
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "100m"
+  #       max-file: "2"
+
   openldap:
     image: osixia/openldap:1.5.0
     container_name: netbird-openldap
@@ -101,6 +137,7 @@ services:
 
 volumes:
   netbird_data:
+  netbird_router_data:
   ldap_data:
   ldap_config:
 

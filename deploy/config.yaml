@@ -3,7 +3,10 @@
 
 server:
   listenAddress: ":80"
-  exposedAddress: "http://localhost:80"
+  # Address peers use to reach signal/relay/stun. Use the docker service name so
+  # in-cluster peers (netbird-router) can resolve it. For host peers, add an
+  # /etc/hosts entry: 127.0.0.1 netbird-server
+  exposedAddress: "http://netbird-server:80"
   stunPorts:
     - 3478
   metricsPort: 9090

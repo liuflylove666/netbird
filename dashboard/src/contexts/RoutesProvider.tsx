@@ -36,7 +36,8 @@ export default function RoutesProvider({ children }: Readonly<Props>) {
     message?: string,
     options?: { remove_access_control_groups?: boolean },
   ) => {
-    const hasDomains = route.domains ? route.domains.length > 0 : false;
+    const nextDomains = toUpdate.domains ?? route.domains;
+    const hasDomains = nextDomains ? nextDomains.length > 0 : false;
 
     notify({
       title: "Network " + route.network_id + "-" + route.network,
@@ -50,9 +51,11 @@ export default function RoutesProvider({ children }: Readonly<Props>) {
             peer: toUpdate.peer ?? (route.peer || undefined),
             peer_groups:
               toUpdate.peer_groups ?? (route.peer_groups || undefined),
-            network: !hasDomains ? route.network : undefined,
-            domains: hasDomains ? route.domains : undefined,
-            keep_route: route.keep_route,
+            network: hasDomains
+              ? undefined
+              : (toUpdate.network ?? route.network),
+            domains: hasDomains ? nextDomains : undefined,
+            keep_route: toUpdate.keep_route ?? route.keep_route ?? false,
             metric: toUpdate.metric ?? route.metric ?? 9999,
             masquerade: toUpdate.masquerade ?? route.masquerade ?? true,
             groups: toUpdate.groups ?? route.groups ?? [],

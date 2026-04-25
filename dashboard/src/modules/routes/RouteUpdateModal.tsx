@@ -19,19 +19,23 @@ import { PeerSelector } from "@components/PeerSelector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@components/Tabs";
 import { Textarea } from "@components/Textarea";
 import { DomainsTooltip } from "@components/ui/DomainListBadge";
+import InputDomain, { domainReducer } from "@components/ui/InputDomain";
 import { getOperatingSystem } from "@hooks/useOperatingSystem";
 import { IconDirectionSign } from "@tabler/icons-react";
 import { cn } from "@utils/helpers";
+import cidr from "ip-cidr";
 import { uniqBy } from "lodash";
 import {
   ArrowDownWideNarrow,
   ExternalLinkIcon,
+  NetworkIcon,
+  PlusIcon,
   Power,
   RouteIcon,
   Settings2,
   Text,
 } from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import NetworkRoutesIcon from "@/assets/icons/NetworkRoutesIcon";
 import { useGroupRoute } from "@/contexts/GroupRouteProvider";
@@ -104,6 +108,24 @@ function RouteUpdateModalContent({ onSuccess, route, cell }: ModalProps) {
     if (isUsingDomains) return "domains";
     return "ip-range";
   }, [isUsingDomains]);
+  const [domainRoutes, setDomainRoutes] = useReducer(
+    domainReducer,
+    (route?.domains ?? []).map((domain, i) => ({
+      id: `domain-${i}`,
+      name: domain,
+    })),
+  );
+  const [domainError, setDomainError] = useState<boolean>(false);
+  const [keepRoute, setKeepRoute] = useState<boolean>(route?.keep_route ?? true);
+  const [networkRange, setNetworkRange] = useState(route?.network ?? "");
+
+  const cidrError = useMemo(() => {
+    if (isUsingDomains) return "";
+    if (networkRange === "") return "Please enter a network range";
+    const validCIDR = cidr.isValidAddress(networkRange);
+    if (!validCIDR) return "Please enter a valid CIDR, e.g., 192.168.1.0/24";
+    return "";
+  }, [networkRange, isUsingDomains]);
 
   // Network
   const [routingPeer, setRoutingPeer] = useState<Peer | undefined>(() => {
@@ -246,6 +268,10 @@ function RouteUpdateModalContent({ onSuccess, route, cell }: ModalProps) {
         })
         .filter((g) => g !== undefined) as string[];
     }
+    const updatedDomains = isUsingDomains
+      ? domainRoutes.map((d) => d.name.trim()).filter((d) => d !== "")
+      : undefined;
+    const updatedNetwork = isUsingDomains ? undefined : networkRange;
 
     updateRoute(
       route,
@@ -257,6 +283,9 @@ function RouteUpdateModalContent({ onSuccess, route, cell }: ModalProps) {
         peer_groups: useSinglePeer ? undefined : peerGroups || undefined,
         metric: Number(metric) || 9999,
         masquerade: useSinglePeer && isNonLinuxRoutingPeer ? true : masquerade,
+        network: updatedNetwork,
+        domains: updatedDomains,
+        keep_route: isUsingDomains ? keepRoute : undefined,
         groups: groupIds,
         access_control_groups: accessControlGroupIds || undefined,
         skip_auto_apply: !isForced,
@@ -289,14 +318,32 @@ function RouteUpdateModalContent({ onSuccess, route, cell }: ModalProps) {
   }, [metric]);
 
   // Is button disabled
+  const isDomainEntered = useMemo(() => {
+    if (!isUsingDomains) return true;
+    const domainNames = domainRoutes.map((d) => d.name.trim());
+    const hasEmptyDomain = domainNames.some((name) => name === "");
+    return domainNames.length > 0 && !hasEmptyDomain && !domainError;
+  }, [isUsingDomains, domainRoutes, domainError]);
+
   const isDisabled = useMemo(() => {
     return (
       (peerTab === "peer-group" && routingPeerGroups.length == 0) ||
       (peerTab === "routing-peer" && !routingPeer) ||
       groups.length == 0 ||
-      metricError !== ""
+      metricError !== "" ||
+      !isDomainEntered ||
+      (!isUsingDomains && cidrError !== "")
     );
-  }, [peerTab, routingPeerGroups.length, routingPeer, groups, metricError]);
+  }, [
+    peerTab,
+    routingPeerGroups.length,
+    routingPeer,
+    groups,
+    metricError,
+    isDomainEntered,
+    isUsingDomains,
+    cidrError,
+  ]);
 
   const [tab, setTab] = useState(
     cell && cell == "metric" ? "settings" : "network",
@@ -377,6 +424,79 @@ function RouteUpdateModalContent({ onSuccess, route, cell }: ModalProps) {
 
         <TabsContent value={"network"} className={"pb-8"}>
           <div className={"px-8 flex-col flex gap-6"}>
+            {!isUsingDomains && (
+              <div>
+                <Label>Network Range</Label>
+                <HelpText>
+                  {isExitNode
+                    ? "Exit nodes always route the default range 0.0.0.0/0 and cannot be modified."
+                    : "Update the private IPv4 address range advertised by this route."}
+                </HelpText>
+                <Input
+                  ref={networkRangeRef}
+                  customPrefix={<NetworkIcon size={16} />}
+                  placeholder={"e.g., 172.16.0.0/16"}
+                  value={networkRange}
+                  className={"font-mono !text-[13px]"}
+                  error={cidrError}
+                  disabled={isExitNode}
+                  onChange={(e) => setNetworkRange(e.target.value)}
+                />
+              </div>
+            )}
+
+            {isUsingDomains && (
+              <div>
+                <Label>Domains</Label>
+                <HelpText>
+                  Add domains that dynamically resolve to one or more IPv4
+                  addresses. A maximum of 32 domains can be added.
+                </HelpText>
+                <div className={"mt-3 flex flex-col gap-2"}>
+                  {domainRoutes.map((domain, i) => (
+                    <InputDomain
+                      key={domain.id}
+                      value={domain}
+                      onChange={(d) =>
+                        setDomainRoutes({
+                          type: "UPDATE",
+                          index: i,
+                          d,
+                        })
+                      }
+                      onError={setDomainError}
+                      onRemove={() =>
+                        setDomainRoutes({
+                          type: "REMOVE",
+                          index: i,
+                        })
+                      }
+                    />
+                  ))}
+                </div>
+                <Button
+                  variant={"dotted"}
+                  className={"w-full mt-3"}
+                  size={"sm"}
+                  disabled={domainRoutes.length === 32}
+                  onClick={() => setDomainRoutes({ type: "ADD" })}
+                >
+                  <PlusIcon size={14} />
+                  Add Domain
+                </Button>
+                <div className={"mt-5"}>
+                  <FancyToggleSwitch
+                    value={keepRoute}
+                    onChange={setKeepRoute}
+                    label={"Keep Routes"}
+                    helpText={
+                      "Retain previously resolved routes after IP address updates to maintain stable connections."
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
             {route.peer ? (
               <div>
                 <Label>Routing Peer</Label>
