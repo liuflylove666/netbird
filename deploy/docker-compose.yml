@@ -35,6 +35,30 @@ services:
         max-size: "500m"
         max-file: "2"
 
+  postgres:
+    image: postgres:16
+    container_name: netbird-postgres
+    restart: unless-stopped
+    networks: [netbird]
+    environment:
+      POSTGRES_USER: "netbird"
+      POSTGRES_PASSWORD: "netbird_pg_password"
+      POSTGRES_DB: "netbird"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/postgres-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netbird -d netbird"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "2"
+
   netbird-server:
     build:
       context: ../
@@ -62,6 +86,8 @@ services:
       NB_PEER_UPDATE_STARTUP_PERIOD_S: "1"
     command: ["--config", "/etc/netbird/config.yaml"]
     depends_on:
+      postgres:
+        condition: service_healthy
       openldap:
         condition: service_healthy
     logging:
@@ -138,6 +164,7 @@ services:
 volumes:
   netbird_data:
   netbird_router_data:
+  postgres_data:
   ldap_data:
   ldap_config:
 

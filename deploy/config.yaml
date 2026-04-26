@@ -56,5 +56,16 @@ server:
   disableGeoliteUpdate: true
 
   store:
-    engine: "sqlite"
+    engine: "postgres"
     encryptionKey: "ENnxrZc34qwY1UnfanSD9ITQaZAXzZVU0MMNRiemWTo="
+    dsn: "host=postgres port=5432 user=netbird password=netbird_pg_password dbname=netbird sslmode=disable"
+
+  # Audit/event store supports sqlite or postgres.
+  activityStore:
+    engine: "postgres"
+    dsn: "host=postgres port=5432 user=netbird password=netbird_pg_password dbname=netbird_activity sslmode=disable"
+
+  # Embedded IdP (Dex) storage supports sqlite3 or postgres.
+  authStore:
+    engine: "postgres"
+    dsn: "host=postgres port=5432 user=netbird password=netbird_pg_password dbname=netbird_auth sslmode=disable"
