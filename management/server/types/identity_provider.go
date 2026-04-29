@@ -43,6 +43,8 @@ const (
 	IdentityProviderTypeAuthentik IdentityProviderType = "authentik"
 	// IdentityProviderTypeKeycloak is the Keycloak identity provider
 	IdentityProviderTypeKeycloak IdentityProviderType = "keycloak"
+	// IdentityProviderTypeADFS is the Microsoft AD FS identity provider
+	IdentityProviderTypeADFS IdentityProviderType = "adfs"
 	// IdentityProviderTypeLDAP is the LDAP identity provider
 	IdentityProviderTypeLDAP IdentityProviderType = "ldap"
 )
@@ -193,7 +195,7 @@ func (t IdentityProviderType) IsValid() bool {
 	case IdentityProviderTypeOIDC, IdentityProviderTypeZitadel, IdentityProviderTypeEntra,
 		IdentityProviderTypeGoogle, IdentityProviderTypeOkta, IdentityProviderTypePocketID,
 		IdentityProviderTypeMicrosoft, IdentityProviderTypeAuthentik, IdentityProviderTypeKeycloak,
-		IdentityProviderTypeLDAP:
+		IdentityProviderTypeADFS, IdentityProviderTypeLDAP:
 		return true
 	}
 	return false
