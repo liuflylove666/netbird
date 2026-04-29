@@ -24,6 +24,7 @@ export const idpIcon = (
     authentik: <AuthentikIcon size={size} />,
     keycloak: <KeycloakIcon size={size} />,
     ldap: <FolderTree size={size} className="text-nb-gray-300" />,
+    adfs: <MicrosoftIcon size={size} />,
     oidc: <KeyRound size={size} className="text-nb-gray-400" />,
   };
 
