@@ -119,21 +119,33 @@ func (p *Provider) ListConnectors(ctx context.Context) ([]*ConnectorConfig, erro
 }
 
 // UpdateConnector updates an existing connector in Dex storage.
-// It merges incoming updates with existing values to prevent data loss on partial updates.
+// It overlays user-mutable config fields (issuer, clientID, clientSecret,
+// redirectURI) onto the stored connector config, and updates the connector name
+// when cfg.Name is set. Empty fields on cfg leave stored values unchanged, so
+// partial updates preserve create-time defaults such as scopes, claimMapping,
+// and userIDKey.
 func (p *Provider) UpdateConnector(ctx context.Context, cfg *ConnectorConfig) error {
 	if err := p.storage.UpdateConnector(ctx, cfg.ID, func(old storage.Connector) (storage.Connector, error) {
-		oldCfg, err := p.parseStorageConnector(old)
-		if err != nil {
-			return storage.Connector{}, fmt.Errorf("failed to parse existing connector: %w", err)
+		if cfg.Type != "" && cfg.Type != inferIdentityProviderType(old.Type, cfg.ID, nil) {
+			return storage.Connector{}, errors.New("connector type change not allowed")
 		}
 
-		mergeConnectorConfig(cfg, oldCfg)
-
-		storageConn, err := p.buildStorageConnector(cfg)
+		configData, err := overlayConnectorConfig(old.Config, cfg)
 		if err != nil {
-			return storage.Connector{}, fmt.Errorf("failed to build connector: %w", err)
+			return storage.Connector{}, fmt.Errorf("failed to overlay connector config: %w", err)
 		}
-		return storageConn, nil
+
+		name := cfg.Name
+		if name == "" {
+			name = old.Name
+		}
+
+		return storage.Connector{
+			ID:     cfg.ID,
+			Type:   old.Type,
+			Name:   name,
+			Config: configData,
+		}, nil
 	}); err != nil {
 		return fmt.Errorf("failed to update connector: %w", err)
 	}
@@ -142,33 +154,119 @@ func (p *Provider) UpdateConnector(ctx context.Context, cfg *ConnectorConfig) er
 	return nil
 }
 
-// mergeConnectorConfig preserves existing values for empty fields in the update.
-func mergeConnectorConfig(cfg, oldCfg *ConnectorConfig) {
-	if cfg.Name == "" {
-		cfg.Name = oldCfg.Name
+// overlayConnectorConfig writes only the user-mutable fields onto the existing
+// stored config, preserving every other field (scopes, claimMapping, userIDKey,
+// insecure flags, etc.). Empty fields on cfg leave the existing value alone.
+func overlayConnectorConfig(oldConfig []byte, cfg *ConnectorConfig) ([]byte, error) {
+	var m map[string]any
+	if err := decodeConnectorConfig(oldConfig, &m); err != nil {
+		return nil, err
 	}
-	if cfg.Type == "ldap" {
-		if cfg.LDAP == nil && oldCfg.LDAP != nil {
-			cfg.LDAP = oldCfg.LDAP
-		} else if cfg.LDAP != nil && oldCfg.LDAP != nil {
-			if cfg.LDAP.BindPW == "" {
-				cfg.LDAP.BindPW = oldCfg.LDAP.BindPW
-			}
+
+	// LDAP connector config is stored as a flat JSON map (host, bindDN, bindPW, ...).
+	// We only update fields that are set on cfg, keeping existing secrets when empty.
+	if cfg.Type == "ldap" && cfg.LDAP != nil {
+		if cfg.LDAP.Host != "" {
+			m["host"] = cfg.LDAP.Host
 		}
-		return
+		// Booleans don't allow us to distinguish "unset" vs "false" here, so we only
+		// update them when the caller is sending an explicit LDAP config object.
+		m["insecureNoSSL"] = cfg.LDAP.InsecureNoSSL
+		m["insecureSkipVerify"] = cfg.LDAP.InsecureSkipVerify
+		m["startTLS"] = cfg.LDAP.StartTLS
+
+		if cfg.LDAP.RootCA != "" {
+			m["rootCA"] = cfg.LDAP.RootCA
+		}
+		if cfg.LDAP.BindDN != "" {
+			m["bindDN"] = cfg.LDAP.BindDN
+		}
+		if cfg.LDAP.BindPW != "" {
+			m["bindPW"] = cfg.LDAP.BindPW
+		}
+
+		// Optional nested fields if present on cfg.
+		if cfg.LDAP.UserSearchBaseDN != "" || cfg.LDAP.UserSearchUsername != "" || cfg.LDAP.UserSearchIDAttr != "" || cfg.LDAP.UserSearchEmailAttr != "" || cfg.LDAP.UserSearchNameAttr != "" || cfg.LDAP.UserSearchFilter != "" {
+			us := map[string]any{}
+			if existingUS, ok := m["userSearch"].(map[string]any); ok {
+				for k, v := range existingUS {
+					us[k] = v
+				}
+			}
+			if cfg.LDAP.UserSearchBaseDN != "" {
+				us["baseDN"] = cfg.LDAP.UserSearchBaseDN
+			}
+			if cfg.LDAP.UserSearchUsername != "" {
+				us["username"] = cfg.LDAP.UserSearchUsername
+			}
+			if cfg.LDAP.UserSearchIDAttr != "" {
+				us["idAttr"] = cfg.LDAP.UserSearchIDAttr
+			}
+			if cfg.LDAP.UserSearchEmailAttr != "" {
+				us["emailAttr"] = cfg.LDAP.UserSearchEmailAttr
+			}
+			if cfg.LDAP.UserSearchNameAttr != "" {
+				us["nameAttr"] = cfg.LDAP.UserSearchNameAttr
+			}
+			if cfg.LDAP.UserSearchFilter != "" {
+				us["filter"] = cfg.LDAP.UserSearchFilter
+			}
+			m["userSearch"] = us
+		}
+
+		if cfg.LDAP.GroupSearchBaseDN != "" || cfg.LDAP.GroupSearchFilter != "" || cfg.LDAP.GroupSearchNameAttr != "" || cfg.LDAP.GroupSearchUserAttr != "" || cfg.LDAP.GroupSearchGroupAttr != "" {
+			gs := map[string]any{}
+			if existingGS, ok := m["groupSearch"].(map[string]any); ok {
+				for k, v := range existingGS {
+					gs[k] = v
+				}
+			}
+			if cfg.LDAP.GroupSearchBaseDN != "" {
+				gs["baseDN"] = cfg.LDAP.GroupSearchBaseDN
+			}
+			if cfg.LDAP.GroupSearchFilter != "" {
+				gs["filter"] = cfg.LDAP.GroupSearchFilter
+			}
+			if cfg.LDAP.GroupSearchNameAttr != "" {
+				gs["nameAttr"] = cfg.LDAP.GroupSearchNameAttr
+			}
+			if cfg.LDAP.GroupSearchUserAttr != "" || cfg.LDAP.GroupSearchGroupAttr != "" {
+				userAttr := cfg.LDAP.GroupSearchUserAttr
+				if userAttr == "" {
+					userAttr = "DN"
+				}
+				groupAttr := cfg.LDAP.GroupSearchGroupAttr
+				if groupAttr == "" {
+					groupAttr = "member"
+				}
+				gs["userMatchers"] = []map[string]any{
+					{"userAttr": userAttr, "groupAttr": groupAttr},
+				}
+			}
+			m["groupSearch"] = gs
+		}
+
+		if cfg.LDAP.RequiredGroups != nil {
+			m["requiredGroups"] = cfg.LDAP.RequiredGroups
+		}
+
+		return encodeConnectorConfig(m)
 	}
-	if cfg.ClientSecret == "" {
-		cfg.ClientSecret = oldCfg.ClientSecret
+
+	// OIDC / OAuth2 style connector overlays.
+	if cfg.Issuer != "" {
+		m["issuer"] = cfg.Issuer
 	}
-	if cfg.RedirectURI == "" {
-		cfg.RedirectURI = oldCfg.RedirectURI
+	if cfg.ClientID != "" {
+		m["clientID"] = cfg.ClientID
 	}
-	if cfg.Issuer == "" && cfg.Type == oldCfg.Type {
-		cfg.Issuer = oldCfg.Issuer
+	if cfg.ClientSecret != "" {
+		m["clientSecret"] = cfg.ClientSecret
 	}
-	if cfg.ClientID == "" {
-		cfg.ClientID = oldCfg.ClientID
+	if cfg.RedirectURI != "" {
+		m["redirectURI"] = cfg.RedirectURI
 	}
+	return encodeConnectorConfig(m)
 }
 
 // DeleteConnector removes a connector from Dex storage.
@@ -259,6 +357,10 @@ func buildOIDCConnectorConfig(cfg *ConnectorConfig, redirectURI string) ([]byte,
 		oidcConfig["getUserInfo"] = true
 	case "entra":
 		oidcConfig["claimMapping"] = map[string]string{"email": "preferred_username"}
+		// Use the Entra Object ID (oid) instead of the default OIDC sub claim.
+		// Entra issues sub as a per-app pairwise identifier that does not match
+		// the stable Object ID.
+		oidcConfig["userIDKey"] = "oid"
 	case "okta":
 		oidcConfig["scopes"] = []string{"openid", "profile", "email", "groups"}
 	case "pocketid":
