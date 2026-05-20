@@ -10,6 +10,7 @@ import loadConfig, { buildExtras } from "@utils/config";
 import { usePathname, useRouter } from "next/navigation";
 import React, { useEffect, useState } from "react";
 import { OIDCError } from "@/auth/OIDCError";
+import { storeOidcAuthError } from "@/auth/oidcAuthError";
 import { SecureProvider } from "@/auth/SecureProvider";
 
 type Props = {
@@ -32,6 +33,12 @@ const auth0AuthorityConfig: AuthorityConfiguration = {
 };
 
 const onEvent = (configurationName: any, eventName: any, data: any) => {
+  if (
+    eventName === "loginCallbackAsync_error" ||
+    eventName === "loginAsync_error"
+  ) {
+    storeOidcAuthError(data);
+  }
   if (process.env.NODE_ENV !== "production") {
     //console.info(`oidc:${configurationName}:${eventName}`, data);
   }

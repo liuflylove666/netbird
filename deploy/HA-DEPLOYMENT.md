@@ -127,6 +127,9 @@
 ## 8. 与本仓库 `deploy/` 的关系
 
 - `deploy/docker-compose.yml`：本地/开发向组合。  
-- `deploy/docker-compose.prod.yml`：生产向示例（健康检查、资源限制等），可作为 **单区域单栈** 基线，再按上文拆分 Relay、外置数据库与反代。  
+- `deploy/docker-compose.prod.yml`：生产向示例（健康检查、资源限制等），可作为 **单区域单栈** 基线，再按上文拆分 Relay、外置数据库与反代。
+- [优化方案.md](./优化方案.md)：生产环境分阶段优化路线图（`netbird.flaship.org` / Traefik）。
+- [MULTI-REGION-RELAY-OPTIMIZATION.md](./MULTI-REGION-RELAY-OPTIMIZATION.md)：跨境优化、多区域 Relay、**OCI 私网 Router（NAT Gateway）** 等实操说明。
+- [ROUTER-RELAY-EDGE-DEPLOYMENT.md](./ROUTER-RELAY-EDGE-DEPLOYMENT.md)：边缘 Relay + Router 同机部署细节。
 
 高可用不是单一 Compose 文件能“一键开启”的，而是 **Relay 多节点 + 数据备份 + 入口与 IdP 韧性 + 运维演练** 的组合；需要 **Management/Signal 双活** 时请通过官方渠道了解企业 On‑Prem 方案。

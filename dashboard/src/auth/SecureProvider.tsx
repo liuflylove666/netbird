@@ -1,7 +1,22 @@
 import { OidcSecure, useOidc } from "@axa-fr/react-oidc";
+import loadConfig from "@utils/config";
 import { usePathname } from "next/navigation";
 import * as React from "react";
 import { useEffect } from "react";
+
+const config = loadConfig();
+
+const isOAuthCallbackPath = (path: string) =>
+  path === config.redirectURI || path === config.silentRedirectURI;
+
+const hasOAuthCallbackParams = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("code") || params.has("error") || params.has("state");
+  } catch {
+    return false;
+  }
+};
 
 const QUERY_PARAMS_KEY = "netbird-query-params";
 const PRESERVE_QUERY_PARAMS_PATHS = ["/peer/ssh", "/peer/rdp"];
@@ -46,9 +61,16 @@ export const SecureProvider = ({ children }: Props) => {
 
   useEffect(() => {
     let timeout: NodeJS.Timeout | undefined = undefined;
-    if (!isAuthenticated) {
+    const onOAuthCallback =
+      isOAuthCallbackPath(currentPath) || hasOAuthCallbackParams();
+
+    if (!isAuthenticated && !onOAuthCallback) {
       timeout = setTimeout(async () => {
-        if (!isAuthenticated) {
+        if (
+          !isAuthenticated &&
+          !isOAuthCallbackPath(currentPath) &&
+          !hasOAuthCallbackParams()
+        ) {
           await login(currentPath);
         }
       }, 1500);

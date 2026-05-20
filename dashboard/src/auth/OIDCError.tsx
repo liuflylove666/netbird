@@ -1,12 +1,16 @@
-import { useOidc, useOidcUser } from "@axa-fr/react-oidc";
+import { OidcUserStatus, useOidc, useOidcUser } from "@axa-fr/react-oidc";
 import Button from "@components/Button";
 import Paragraph from "@components/Paragraph";
 import loadConfig from "@utils/config";
-import { ArrowRightIcon } from "lucide-react";
+import { ArrowRightIcon, RefreshCw } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import NetBirdIcon from "@/assets/icons/NetBirdIcon";
+import {
+  clearOidcAuthError,
+  readOidcAuthError,
+} from "@/auth/oidcAuthError";
 
 const config = loadConfig();
 
@@ -15,10 +19,30 @@ export const OIDCError = () => {
   const params = useSearchParams();
   const errorParam = params.get("error");
   const accessDenied = errorParam === "access_denied";
-  const invalidRequest = errorParam === "invalid_request";
   const [title, setTitle] = useState(params.get("error_description"));
   const errorDescription = params.get("error_description");
-  const { logout, login } = useOidc();
+  const { logout } = useOidc();
+  const [storedError, setStoredError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setStoredError(readOidcAuthError());
+  }, []);
+
+  const errorMessage = useMemo(() => {
+    if (errorParam && errorDescription) {
+      return `${errorParam}: ${errorDescription}`;
+    }
+    if (errorParam) {
+      return errorParam;
+    }
+    if (storedError) {
+      return storedError;
+    }
+    if (oidcUserLoadingState === OidcUserStatus.Unauthenticated) {
+      return "Session exchange failed. Your login may have succeeded, but the dashboard could not obtain a token.";
+    }
+    return oidcUserLoadingState;
+  }, [errorDescription, errorParam, oidcUserLoadingState, storedError]);
 
   useEffect(() => {
     if (accessDenied) {
@@ -31,6 +55,16 @@ export const OIDCError = () => {
       setTitle("Oops, something went wrong");
     }
   }, [accessDenied, title]);
+
+  const handleLogout = () => {
+    clearOidcAuthError();
+    logout("/", { client_id: config.clientId });
+  };
+
+  const handleTryAgain = () => {
+    clearOidcAuthError();
+    logout("/", { client_id: config.clientId });
+  };
 
   return (
     <div
@@ -57,7 +91,7 @@ export const OIDCError = () => {
             variant={"primary"}
             size={"sm"}
             className={"mt-5"}
-            onClick={() => logout("/", { client_id: config.clientId })}
+            onClick={handleLogout}
           >
             Continue
             <ArrowRightIcon size={16} />
@@ -67,7 +101,7 @@ export const OIDCError = () => {
             variant={"default-outline"}
             size={"sm"}
             className={"mt-5"}
-            onClick={() => logout("/", { client_id: config.clientId })}
+            onClick={handleLogout}
           >
             Trouble logging in? Try again.
           </Button>
@@ -76,21 +110,23 @@ export const OIDCError = () => {
         <>
           <Paragraph className={"text-center mt-2 block"}>
             There was an error logging you in. <br />
-            Error:{" "}
-            <span className={"inline capitalize"}>
-              {invalidRequest && errorDescription
-                ? errorDescription
-                : oidcUserLoadingState}
-            </span>
+            Error: <span className={"inline"}>{errorMessage}</span>
           </Paragraph>
-          <Button
-            variant={"primary"}
-            size={"sm"}
-            className={"mt-5"}
-            onClick={() => logout("/", { client_id: config.clientId })}
-          >
-            Logout
-          </Button>
+          {!errorParam && (
+            <Paragraph className={"text-center mt-3 text-sm text-nb-gray-400"}>
+              Try again in a normal browser window without privacy extensions.
+              Do not refresh the login callback page.
+            </Paragraph>
+          )}
+          <div className={"mt-5 flex flex-col gap-3"}>
+            <Button variant={"primary"} size={"sm"} onClick={handleTryAgain}>
+              <RefreshCw size={16} className={"mr-2"} />
+              Try Again
+            </Button>
+            <Button variant={"default-outline"} size={"sm"} onClick={handleLogout}>
+              Logout
+            </Button>
+          </div>
         </>
       )}
     </div>
