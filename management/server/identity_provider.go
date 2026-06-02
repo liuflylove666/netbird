@@ -93,7 +93,7 @@ func validateIdentityProviderConfig(ctx context.Context, idpConfig *types.Identi
 
 // GetIdentityProviders returns all identity providers for an account
 func (am *DefaultAccountManager) GetIdentityProviders(ctx context.Context, accountID, userID string) ([]*types.IdentityProvider, error) {
-	ok, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Read)
+	ok, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Read)
 	if err != nil {
 		return nil, status.NewPermissionValidationError(err)
 	}
@@ -122,7 +122,7 @@ func (am *DefaultAccountManager) GetIdentityProviders(ctx context.Context, accou
 
 // GetIdentityProvider returns a specific identity provider by ID
 func (am *DefaultAccountManager) GetIdentityProvider(ctx context.Context, accountID, idpID, userID string) (*types.IdentityProvider, error) {
-	ok, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Read)
+	ok, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Read)
 	if err != nil {
 		return nil, status.NewPermissionValidationError(err)
 	}
@@ -148,7 +148,7 @@ func (am *DefaultAccountManager) GetIdentityProvider(ctx context.Context, accoun
 
 // CreateIdentityProvider creates a new identity provider
 func (am *DefaultAccountManager) CreateIdentityProvider(ctx context.Context, accountID, userID string, idpConfig *types.IdentityProvider) (*types.IdentityProvider, error) {
-	ok, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Create)
+	ok, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Create)
 	if err != nil {
 		return nil, status.NewPermissionValidationError(err)
 	}
@@ -185,7 +185,7 @@ func (am *DefaultAccountManager) CreateIdentityProvider(ctx context.Context, acc
 
 // UpdateIdentityProvider updates an existing identity provider
 func (am *DefaultAccountManager) UpdateIdentityProvider(ctx context.Context, accountID, idpID, userID string, idpConfig *types.IdentityProvider) (*types.IdentityProvider, error) {
-	ok, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Update)
+	ok, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Update)
 	if err != nil {
 		return nil, status.NewPermissionValidationError(err)
 	}
@@ -218,7 +218,7 @@ func (am *DefaultAccountManager) UpdateIdentityProvider(ctx context.Context, acc
 
 // DeleteIdentityProvider deletes an identity provider
 func (am *DefaultAccountManager) DeleteIdentityProvider(ctx context.Context, accountID, idpID, userID string) error {
-	ok, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Delete)
+	ok, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Delete)
 	if err != nil {
 		return status.NewPermissionValidationError(err)
 	}

@@ -35,6 +35,16 @@ func (fs onlyFilesFS) Open(name string) (http.File, error) {
 	return f, nil
 }
 
+// Handler returns an HTTP handler for /downloads/ when NB_CLIENT_DOWNLOADS_DIR is set.
+func Handler(corsMiddleware *cors.Cors) http.Handler {
+	if strings.TrimSpace(os.Getenv(EnvClientDownloadsDir)) == "" {
+		return nil
+	}
+	root := mux.NewRouter()
+	Register(root, corsMiddleware)
+	return root
+}
+
 // Register mounts GET/HEAD /downloads/ when NB_CLIENT_DOWNLOADS_DIR is set.
 func Register(root *mux.Router, corsMiddleware *cors.Cors) {
 	dir := strings.TrimSpace(os.Getenv(EnvClientDownloadsDir))
