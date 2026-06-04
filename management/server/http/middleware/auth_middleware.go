@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	serverauth "github.com/netbirdio/netbird/management/server/auth"
 	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/http/middleware/bypass"
+	"github.com/netbirdio/netbird/management/server/mfa"
 	"github.com/netbirdio/netbird/management/server/types"
 	"github.com/netbirdio/netbird/shared/auth"
 	"github.com/netbirdio/netbird/shared/management/http/util"
@@ -24,6 +26,7 @@ type EnsureAccountFunc func(ctx context.Context, userAuth auth.UserAuth) (string
 type SyncUserJWTGroupsFunc func(ctx context.Context, userAuth auth.UserAuth) error
 
 type GetUserFromUserAuthFunc func(ctx context.Context, userAuth auth.UserAuth) (*types.User, error)
+type GetAccountSettingsFunc func(ctx context.Context, accountID string) (*types.Settings, error)
 
 type IsValidChildAccountFunc func(ctx context.Context, userID, accountID, childAccountID string) bool
 
@@ -32,6 +35,7 @@ type AuthMiddleware struct {
 	authManager         serverauth.Manager
 	ensureAccount       EnsureAccountFunc
 	getUserFromUserAuth GetUserFromUserAuthFunc
+	getAccountSettings  GetAccountSettingsFunc
 	syncUserJWTGroups   SyncUserJWTGroupsFunc
 	rateLimiter         *APIRateLimiter
 	patUsageTracker     *PATUsageTracker
@@ -68,6 +72,10 @@ func NewAuthMiddleware(
 	}
 }
 
+func (m *AuthMiddleware) SetGetAccountSettings(fn GetAccountSettingsFunc) {
+	m.getAccountSettings = fn
+}
+
 // Handler method of the middleware which authenticates a user either by JWT claims or by PAT
 func (m *AuthMiddleware) Handler(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -86,9 +94,14 @@ func (m *AuthMiddleware) Handler(h http.Handler) http.Handler {
 
 		switch authType {
 		case "bearer":
-			if err := m.checkJWTFromRequest(r, authHeader); err != nil {
+			user, err := m.checkJWTFromRequest(r, authHeader)
+			if err != nil {
 				log.WithContext(r.Context()).Errorf("Error when validating JWT: %s", err.Error())
 				util.WriteError(r.Context(), status.Errorf(status.Unauthorized, "token invalid"), w)
+				return
+			}
+			if err := m.enforceMFA(r, user); err != nil {
+				util.WriteError(r.Context(), err, w)
 				return
 			}
 			h.ServeHTTP(w, r)
@@ -111,19 +124,19 @@ func (m *AuthMiddleware) Handler(h http.Handler) http.Handler {
 }
 
 // CheckJWTFromRequest checks if the JWT is valid
-func (m *AuthMiddleware) checkJWTFromRequest(r *http.Request, authHeaderParts []string) error {
+func (m *AuthMiddleware) checkJWTFromRequest(r *http.Request, authHeaderParts []string) (*types.User, error) {
 	token, err := getTokenFromJWTRequest(authHeaderParts)
 
 	// If an error occurs, call the error handler and return an error
 	if err != nil {
-		return fmt.Errorf("error extracting token: %w", err)
+		return nil, fmt.Errorf("error extracting token: %w", err)
 	}
 
 	ctx := r.Context()
 
 	userAuth, validatedToken, err := m.authManager.ValidateAndParseToken(ctx, token)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if impersonate, ok := r.URL.Query()["account"]; ok && len(impersonate) == 1 {
@@ -139,7 +152,7 @@ func (m *AuthMiddleware) checkJWTFromRequest(r *http.Request, authHeaderParts []
 	// we need to call this method because if user is new, we will automatically add it to existing or create a new account
 	accountId, _, err := m.ensureAccount(ctx, userAuth)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if userAuth.AccountId != accountId {
@@ -149,7 +162,7 @@ func (m *AuthMiddleware) checkJWTFromRequest(r *http.Request, authHeaderParts []
 
 	userAuth, err = m.authManager.EnsureUserAccessByJWTGroups(ctx, userAuth, validatedToken)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = m.syncUserJWTGroups(ctx, userAuth)
@@ -157,15 +170,91 @@ func (m *AuthMiddleware) checkJWTFromRequest(r *http.Request, authHeaderParts []
 		log.WithContext(ctx).Errorf("HTTP server failed to sync user JWT groups: %s", err)
 	}
 
-	_, err = m.getUserFromUserAuth(ctx, userAuth)
+	user, err := m.getUserFromUserAuth(ctx, userAuth)
 	if err != nil {
 		log.WithContext(ctx).Errorf("HTTP server failed to update user from user auth: %s", err)
-		return err
+		return nil, err
 	}
 
 	// propagates ctx change to upstream middleware
 	*r = *nbcontext.SetUserAuthInRequest(r, userAuth)
+	return user, nil
+}
+
+func (m *AuthMiddleware) enforceMFA(r *http.Request, user *types.User) error {
+	if user == nil || user.IsServiceUser {
+		return nil
+	}
+
+	userAuth, err := nbcontext.GetUserAuthFromContext(r.Context())
+	if err != nil {
+		return err
+	}
+	if userAuth.IsPAT || isMFAAllowedPath(r.URL.Path, r.Method, userAuth.UserId) {
+		return nil
+	}
+
+	if user.MFAEnabled {
+		if user.MFASecret == "" {
+			return status.Errorf(status.PreconditionFailed, "MFA setup required")
+		}
+		if !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt) && !mfa.ConsumeOIDCSession(userAuth.UserId, userAuth.IssuedAt) {
+			return status.Errorf(status.PreconditionFailed, "MFA verification required")
+		}
+		return nil
+	}
+
+	if m.getAccountSettings == nil {
+		return nil
+	}
+
+	accountSettings, err := m.getAccountSettings(r.Context(), userAuth.AccountId)
+	if err != nil {
+		return err
+	}
+	if accountSettings.MFARequired {
+		return status.Errorf(status.PreconditionFailed, "MFA setup required")
+	}
+
 	return nil
+}
+
+func isMFAAllowedPath(requestPath, method, userID string) bool {
+	if method == http.MethodOptions {
+		return true
+	}
+
+	requestPath = strings.TrimSuffix(requestPath, "/")
+	requestPath = strings.TrimPrefix(requestPath, "/api")
+
+	if requestPath == "/users/current" {
+		return true
+	}
+
+	const userPrefix = "/users/"
+	if !strings.HasPrefix(requestPath, userPrefix) {
+		return false
+	}
+
+	parts := strings.Split(strings.TrimPrefix(requestPath, userPrefix), "/")
+	if len(parts) != 3 || parts[1] != "mfa" {
+		return false
+	}
+
+	requestUserID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		requestUserID = parts[0]
+	}
+	if requestUserID != userID {
+		return false
+	}
+
+	switch parts[2] {
+	case "setup", "enable", "disable", "verify", "status":
+		return true
+	default:
+		return false
+	}
 }
 
 // CheckPATFromRequest checks if the PAT is valid

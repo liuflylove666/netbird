@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SOURCE="./dashboard/"
-DEST="../netbird-dashboard/"
+DEST="../dashboard/"
 
 echo ">>> 正在同步 Dashboard 文件..."
 

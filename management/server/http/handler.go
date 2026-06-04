@@ -29,6 +29,7 @@ import (
 	recordsManager "github.com/netbirdio/netbird/management/internals/modules/zones/records/manager"
 	"github.com/netbirdio/netbird/management/server/account"
 	"github.com/netbirdio/netbird/management/server/settings"
+	"github.com/netbirdio/netbird/management/server/store"
 
 	"github.com/netbirdio/netbird/management/server/permissions"
 
@@ -95,6 +96,9 @@ func NewAPIHandler(ctx context.Context, router *mux.Router, accountManager accou
 		appMetrics.GetMeter(),
 		isValidChildAccount,
 	)
+	authMiddleware.SetGetAccountSettings(func(ctx context.Context, accountID string) (*types.Settings, error) {
+		return accountManager.GetStore().GetAccountSettings(ctx, store.LockingStrengthNone, accountID)
+	})
 
 	corsMiddleware := cors.AllowAll()
 

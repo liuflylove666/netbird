@@ -292,7 +292,7 @@ func (am *DefaultAccountManager) UpdateUserPassword(ctx context.Context, account
 			return status.Errorf(status.InvalidArgument, "failed to update password: %v", err)
 		}
 	} else {
-		allowed, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, currentUserID, modules.Users, operations.Update)
+		allowed, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, currentUserID, modules.Users, operations.Update)
 		if err != nil {
 			return status.NewPermissionValidationError(err)
 		}
@@ -1704,7 +1704,7 @@ func (am *DefaultAccountManager) createExternalIdpPreRegistration(ctx context.Co
 		return nil, status.Errorf(status.InvalidArgument, "invalid password: %v", err)
 	}
 
-	allowed, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, initiatorUserID, modules.Users, operations.Create)
+	allowed, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, initiatorUserID, modules.Users, operations.Create)
 	if err != nil {
 		return nil, status.NewPermissionValidationError(err)
 	}

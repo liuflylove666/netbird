@@ -2,6 +2,7 @@ package mfagate
 
 import (
 	"bytes"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"github.com/netbirdio/netbird/idp/dex"
 	"github.com/netbirdio/netbird/management/server/mfa"
 	nbstore "github.com/netbirdio/netbird/management/server/store"
+	nbstatus "github.com/netbirdio/netbird/shared/management/status"
 )
 
 type pendingMFA struct {
@@ -69,16 +71,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) interceptForMFA(w http.ResponseWriter, r *http.Request, redirectURL, code string) bool {
 	authCode, err := h.dexStorage.GetAuthCode(r.Context(), code)
 	if err != nil {
-		log.Debugf("MFA gate: auth code lookup skipped: %v", err)
-		return false
+		if isNotFound(err) {
+			log.Debugf("MFA gate: auth code lookup skipped: %v", err)
+			return false
+		}
+		log.Errorf("MFA gate: auth code lookup failed: %v", err)
+		http.Error(w, "MFA verification is temporarily unavailable. Please try again.", http.StatusServiceUnavailable)
+		return true
 	}
 
 	encodedUserID := dex.EncodeDexUserID(authCode.Claims.UserID, authCode.ConnectorID)
 
 	user, err := h.mgmtStore.GetUserByUserID(r.Context(), nbstore.LockingStrengthNone, encodedUserID)
 	if err != nil {
-		log.Debugf("MFA gate: user lookup skipped: %v", err)
-		return false
+		if isNotFound(err) {
+			log.Debugf("MFA gate: user lookup skipped: %v", err)
+			return false
+		}
+		log.Errorf("MFA gate: user lookup failed: %v", err)
+		http.Error(w, "MFA verification is temporarily unavailable. Please try again.", http.StatusServiceUnavailable)
+		return true
 	}
 
 	if !user.MFAEnabled || user.MFASecret == "" {
@@ -100,6 +112,7 @@ func (h *Handler) interceptForMFA(w http.ResponseWriter, r *http.Request, redire
 		Path:     "/oauth2/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   isHTTPS(r),
 		MaxAge:   300,
 	})
 
@@ -120,6 +133,11 @@ func (h *Handler) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 
 	if !ok || time.Since(session.createdAt) > 5*time.Minute {
+		if ok {
+			h.mu.Lock()
+			delete(h.pending, cookie.Value)
+			h.mu.Unlock()
+		}
 		http.Error(w, "Session expired. Please log in again.", http.StatusBadRequest)
 		return
 	}
@@ -136,10 +154,18 @@ func (h *Handler) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := mfa.CheckRateLimit(session.userID); err != nil {
+		renderMFAForm(w, err.Error())
+		return
+	}
+
 	if !mfa.ValidateCode(user.MFASecret, code) {
+		mfa.RecordFailure(session.userID)
 		renderMFAForm(w, "Invalid code. Please try again.")
 		return
 	}
+
+	mfa.ClearFailures(session.userID)
 
 	h.mu.Lock()
 	delete(h.pending, cookie.Value)
@@ -150,10 +176,10 @@ func (h *Handler) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/oauth2/",
 		HttpOnly: true,
+		Secure:   isHTTPS(r),
 		MaxAge:   -1,
 	})
 
-	mfa.SetSession(session.userID, time.Now())
 	mfa.SetOIDCSession(session.userID)
 
 	log.Infof("MFA gate: TOTP verified for user %s", session.userID)
@@ -182,15 +208,32 @@ func extractCode(location string) string {
 	return u.Query().Get("code")
 }
 
+func isNotFound(err error) bool {
+	if errors.Is(err, storage.ErrNotFound) {
+		return true
+	}
+	if s, ok := nbstatus.FromError(err); ok && s != nil && s.Type() == nbstatus.NotFound {
+		return true
+	}
+	return false
+}
+
+func isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
 type bufferedWriter struct {
 	header     http.Header
 	body       bytes.Buffer
 	statusCode int
 }
 
-func (b *bufferedWriter) Header() http.Header     { return b.header }
+func (b *bufferedWriter) Header() http.Header         { return b.header }
 func (b *bufferedWriter) Write(d []byte) (int, error) { return b.body.Write(d) }
-func (b *bufferedWriter) WriteHeader(code int)     { b.statusCode = code }
+func (b *bufferedWriter) WriteHeader(code int)        { b.statusCode = code }
 
 func flushBuffered(w http.ResponseWriter, buf *bufferedWriter) {
 	for k, vv := range buf.header {

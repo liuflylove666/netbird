@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/base32"
 	"fmt"
 	"strings"
 	"time"
@@ -276,7 +277,7 @@ func NewOwnerUser(id string, email string, name string) *User {
 	return NewUser(id, UserRoleOwner, false, false, "", []string{}, UserIssuedAPI, email, name)
 }
 
-// EncryptSensitiveData encrypts the user's sensitive fields (Email and Name) in place.
+// EncryptSensitiveData encrypts the user's sensitive fields in place.
 func (u *User) EncryptSensitiveData(enc *crypt.FieldEncrypt) error {
 	if enc == nil {
 		return nil
@@ -297,10 +298,17 @@ func (u *User) EncryptSensitiveData(enc *crypt.FieldEncrypt) error {
 		}
 	}
 
+	if u.MFASecret != "" {
+		u.MFASecret, err = enc.Encrypt(u.MFASecret)
+		if err != nil {
+			return fmt.Errorf("encrypt mfa secret: %w", err)
+		}
+	}
+
 	return nil
 }
 
-// DecryptSensitiveData decrypts the user's sensitive fields (Email and Name) in place.
+// DecryptSensitiveData decrypts the user's sensitive fields in place.
 func (u *User) DecryptSensitiveData(enc *crypt.FieldEncrypt) error {
 	if enc == nil {
 		return nil
@@ -321,5 +329,24 @@ func (u *User) DecryptSensitiveData(enc *crypt.FieldEncrypt) error {
 		}
 	}
 
+	if u.MFASecret != "" {
+		u.MFASecret, err = enc.Decrypt(u.MFASecret)
+		if err != nil {
+			if isPlainTOTPSecret(u.MFASecret) {
+				return nil
+			}
+			return fmt.Errorf("decrypt mfa secret: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func isPlainTOTPSecret(secret string) bool {
+	if strings.TrimSpace(secret) != secret {
+		return false
+	}
+
+	_, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(secret))
+	return err == nil
 }

@@ -255,7 +255,7 @@ func (am *DefaultAccountManager) DeleteIdentityProvider(ctx context.Context, acc
 
 // ListLDAPGroups returns all LDAP group names for the specified LDAP identity provider.
 func (am *DefaultAccountManager) ListLDAPGroups(ctx context.Context, accountID, idpID, userID string) ([]string, error) {
-	ok, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Read)
+	ok, ctx, err := am.permissionsManager.ValidateUserPermissions(ctx, accountID, userID, modules.IdentityProviders, operations.Read)
 	if err != nil {
 		return nil, status.NewPermissionValidationError(err)
 	}

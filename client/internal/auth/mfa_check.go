@@ -2,15 +2,17 @@ package auth
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
+
+var mfaHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 type mfaUserInfo struct {
 	ID               string `json:"id"`
@@ -28,7 +30,7 @@ func fetchMFAStatus(mgmtBaseURL, jwtToken string) (*mfaUserInfo, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+jwtToken)
 
-	resp, err := mfaHTTPClient().Do(req)
+	resp, err := mfaHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -57,7 +59,7 @@ func verifyMFACode(mgmtBaseURL, jwtToken, userID, code string) error {
 	req.Header.Set("Authorization", "Bearer "+jwtToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := mfaHTTPClient().Do(req)
+	resp, err := mfaHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -71,26 +73,15 @@ func verifyMFACode(mgmtBaseURL, jwtToken, userID, code string) error {
 }
 
 // isMFARequired returns true if the user has MFA enabled and session is unverified.
-// Returns (userInfo, true) when TOTP prompt is needed, or (nil, false) on any error
-// or when MFA is not required (graceful degradation for servers without MFA support).
-func isMFARequired(mgmtBaseURL, jwtToken string) (*mfaUserInfo, bool) {
+// Status check failures are returned so login does not silently bypass MFA.
+func isMFARequired(mgmtBaseURL, jwtToken string) (*mfaUserInfo, bool, error) {
 	user, err := fetchMFAStatus(mgmtBaseURL, jwtToken)
 	if err != nil {
-		log.Debugf("MFA status check skipped: %v", err)
-		return nil, false
+		log.Debugf("MFA status check failed: %v", err)
+		return nil, false, fmt.Errorf("check MFA status: %w", err)
 	}
 	if user.MFASetupRequired {
-		log.Warnf("Your administrator requires MFA but you have not set it up yet. Please enable MFA via the NetBird dashboard before connecting.")
+		return user, false, fmt.Errorf("MFA setup required: your administrator requires MFA, but it is not enabled for your account. Enable MFA in the NetBird dashboard before connecting")
 	}
-	return user, user.MFARequired
-}
-
-func mfaHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec
-			},
-		},
-	}
+	return user, user.MFARequired, nil
 }

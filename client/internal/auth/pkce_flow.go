@@ -296,7 +296,13 @@ func (p *PKCEAuthorizationFlow) startServer(server *http.Server, tokenChan chan<
 				}
 			}
 
-			if user, needed := isMFARequired(p.providerConfig.ManagementURL, jwt); needed {
+			user, needed, err := isMFARequired(p.providerConfig.ManagementURL, jwt)
+			if err != nil {
+				renderPKCEFlowTmpl(w, err)
+				errChan <- err
+				return
+			}
+			if needed {
 				log.Infof("MFA verification required for user %s", user.ID)
 				pending.mu.Lock()
 				pending.token = token

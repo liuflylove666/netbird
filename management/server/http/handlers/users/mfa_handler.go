@@ -63,7 +63,7 @@ func (h *mfaHandler) setupMFA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if userRecord.MFAEnabled {
+	if userRecord.MFAEnabled && userRecord.MFASecret != "" {
 		util.WriteError(r.Context(), status.Errorf(status.PreconditionFailed, "MFA is already enabled. Disable it first before re-setup."), w)
 		return
 	}
@@ -204,6 +204,7 @@ func (h *mfaHandler) disableMFA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mfa.ClearSession(targetUserID)
+	mfa.ClearOIDCSession(targetUserID)
 
 	util.WriteJSONObject(r.Context(), w, map[string]bool{"mfa_enabled": false})
 }
@@ -254,7 +255,6 @@ func (h *mfaHandler) verifyMFA(w http.ResponseWriter, r *http.Request) {
 
 	mfa.ClearFailures(targetUserID)
 	mfa.SetSession(targetUserID, userAuth.IssuedAt)
-	mfa.SetOIDCSession(targetUserID)
 
 	util.WriteJSONObject(r.Context(), w, map[string]bool{"verified": true})
 }
@@ -283,6 +283,6 @@ func (h *mfaHandler) mfaStatus(w http.ResponseWriter, r *http.Request) {
 
 	util.WriteJSONObject(r.Context(), w, &mfaStatusResponse{
 		Enabled:  userRecord.MFAEnabled,
-		Verified: mfa.IsSessionValid(targetUserID, userAuth.IssuedAt) || mfa.IsOIDCSessionValid(targetUserID),
+		Verified: mfa.IsSessionValid(targetUserID, userAuth.IssuedAt) || mfa.ConsumeOIDCSession(targetUserID, userAuth.IssuedAt),
 	})
 }

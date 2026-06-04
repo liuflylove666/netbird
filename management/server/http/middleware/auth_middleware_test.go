@@ -14,6 +14,7 @@ import (
 	"github.com/netbirdio/netbird/management/server/auth"
 	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/http/middleware/bypass"
+	"github.com/netbirdio/netbird/management/server/mfa"
 	"github.com/netbirdio/netbird/management/server/types"
 	"github.com/netbirdio/netbird/management/server/util"
 	nbauth "github.com/netbirdio/netbird/shared/auth"
@@ -239,6 +240,122 @@ func TestAuthMiddleware_Handler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthMiddleware_Handler_MFAEnforcement(t *testing.T) {
+	defer mfa.ClearSession(userID)
+	defer mfa.ClearOIDCSession(userID)
+	mfa.ClearSession(userID)
+	mfa.ClearOIDCSession(userID)
+
+	mockAuth := &auth.MockManager{
+		ValidateAndParseTokenFunc:       mockValidateAndParseToken,
+		EnsureUserAccessByJWTGroupsFunc: mockEnsureUserAccessByJWTGroups,
+		MarkPATUsedFunc:                 mockMarkPATUsed,
+		GetPATInfoFunc:                  mockGetAccountInfoFromPAT,
+	}
+
+	disabledLimiter := NewAPIRateLimiter(nil)
+	disabledLimiter.SetEnabled(false)
+	authMiddleware := NewAuthMiddleware(
+		mockAuth,
+		func(ctx context.Context, userAuth nbauth.UserAuth) (string, string, error) {
+			return userAuth.AccountId, userAuth.UserId, nil
+		},
+		func(ctx context.Context, userAuth nbauth.UserAuth) error {
+			return nil
+		},
+		func(ctx context.Context, userAuth nbauth.UserAuth) (*types.User, error) {
+			return &types.User{
+				Id:         userAuth.UserId,
+				AccountID:  userAuth.AccountId,
+				MFAEnabled: true,
+				MFASecret:  "secret",
+			}, nil
+		},
+		disabledLimiter,
+		nil,
+		func(_ context.Context, _, _, _ string) bool { return false },
+	)
+
+	handler := authMiddleware.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "http://testing/api/peers", nil)
+	req.Header.Set("Authorization", "Bearer "+JWT)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
+
+	for _, allowedPath := range []string{
+		"/api/users/current",
+		"/api/users/" + userID + "/mfa/verify",
+		"/api/users/" + userID + "/mfa/status",
+	} {
+		req = httptest.NewRequest(http.MethodGet, "http://testing"+allowedPath, nil)
+		req.Header.Set("Authorization", "Bearer "+JWT)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, allowedPath)
+	}
+
+	mfa.SetSession(userID, time.Time{})
+
+	req = httptest.NewRequest(http.MethodGet, "http://testing/api/peers", nil)
+	req.Header.Set("Authorization", "Bearer "+JWT)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestAuthMiddleware_Handler_MFARequiredSetting(t *testing.T) {
+	mockAuth := &auth.MockManager{
+		ValidateAndParseTokenFunc:       mockValidateAndParseToken,
+		EnsureUserAccessByJWTGroupsFunc: mockEnsureUserAccessByJWTGroups,
+		MarkPATUsedFunc:                 mockMarkPATUsed,
+		GetPATInfoFunc:                  mockGetAccountInfoFromPAT,
+	}
+
+	disabledLimiter := NewAPIRateLimiter(nil)
+	disabledLimiter.SetEnabled(false)
+	authMiddleware := NewAuthMiddleware(
+		mockAuth,
+		func(ctx context.Context, userAuth nbauth.UserAuth) (string, string, error) {
+			return userAuth.AccountId, userAuth.UserId, nil
+		},
+		func(ctx context.Context, userAuth nbauth.UserAuth) error {
+			return nil
+		},
+		func(ctx context.Context, userAuth nbauth.UserAuth) (*types.User, error) {
+			return &types.User{
+				Id:        userAuth.UserId,
+				AccountID: userAuth.AccountId,
+			}, nil
+		},
+		disabledLimiter,
+		nil,
+		func(_ context.Context, _, _, _ string) bool { return false },
+	)
+	authMiddleware.SetGetAccountSettings(func(ctx context.Context, accountID string) (*types.Settings, error) {
+		return &types.Settings{MFARequired: true}, nil
+	})
+
+	handler := authMiddleware.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "http://testing/api/groups", nil)
+	req.Header.Set("Authorization", "Bearer "+JWT)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, "http://testing/api/users/"+userID+"/mfa/setup", nil)
+	req.Header.Set("Authorization", "Bearer "+JWT)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestAuthMiddleware_RateLimiting(t *testing.T) {

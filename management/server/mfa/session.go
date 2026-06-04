@@ -7,10 +7,12 @@ import (
 )
 
 const (
-	SessionTTL       = 12 * time.Hour
-	MaxAttempts      = 5
-	LockoutDuration  = 15 * time.Minute
-	CleanupInterval  = 30 * time.Minute
+	SessionTTL      = 12 * time.Hour
+	OIDCSessionTTL  = 5 * time.Minute
+	OIDCTokenSkew   = time.Minute
+	MaxAttempts     = 5
+	LockoutDuration = 15 * time.Minute
+	CleanupInterval = 30 * time.Minute
 )
 
 type sessionEntry struct {
@@ -53,7 +55,7 @@ func cleanupLoop() {
 
 		oidcSessionsMu.Lock()
 		for uid, verifiedAt := range oidcSessions {
-			if now.Sub(verifiedAt) > SessionTTL {
+			if now.Sub(verifiedAt) > OIDCSessionTTL {
 				delete(oidcSessions, uid)
 			}
 		}
@@ -103,23 +105,43 @@ func ClearSession(userID string) {
 }
 
 // SetOIDCSession records that a user passed MFA during the OIDC login flow (MFA Gate).
-// Unlike SetSession, this is not tied to a specific JWT iat — it covers the entire
-// OIDC login and persists for SessionTTL.
+// The session is a short-lived bridge that must be consumed by the first JWT
+// issued by that OIDC flow, then it is converted into a token-iat-bound session.
 func SetOIDCSession(userID string) {
 	oidcSessionsMu.Lock()
 	defer oidcSessionsMu.Unlock()
 	oidcSessions[userID] = time.Now()
 }
 
-// IsOIDCSessionValid checks if the user recently passed MFA at the OIDC layer.
-func IsOIDCSessionValid(userID string) bool {
-	oidcSessionsMu.RLock()
-	defer oidcSessionsMu.RUnlock()
-	verifiedAt, ok := oidcSessions[userID]
-	if !ok {
+// ConsumeOIDCSession binds a recent OIDC-layer MFA verification to the JWT
+// created by that login. It returns false for old sessions, zero iat values,
+// or JWTs issued outside the narrow post-MFA exchange window.
+func ConsumeOIDCSession(userID string, tokenIat time.Time) bool {
+	if tokenIat.IsZero() {
 		return false
 	}
-	return time.Since(verifiedAt) <= SessionTTL
+
+	now := time.Now()
+	oidcSessionsMu.Lock()
+	verifiedAt, ok := oidcSessions[userID]
+	if !ok {
+		oidcSessionsMu.Unlock()
+		return false
+	}
+	if now.Sub(verifiedAt) > OIDCSessionTTL {
+		delete(oidcSessions, userID)
+		oidcSessionsMu.Unlock()
+		return false
+	}
+	if tokenIat.Before(verifiedAt.Add(-OIDCTokenSkew)) || tokenIat.After(verifiedAt.Add(OIDCSessionTTL)) {
+		oidcSessionsMu.Unlock()
+		return false
+	}
+	delete(oidcSessions, userID)
+	oidcSessionsMu.Unlock()
+
+	SetSession(userID, tokenIat)
+	return true
 }
 
 // ClearOIDCSession removes the OIDC MFA session for a user.

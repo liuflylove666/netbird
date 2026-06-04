@@ -16,11 +16,12 @@ func TestUser_EncryptSensitiveData(t *testing.T) {
 	fieldEncrypt, err := crypt.NewFieldEncrypt(key)
 	require.NoError(t, err)
 
-	t.Run("encrypt email and name", func(t *testing.T) {
+	t.Run("encrypt email name and mfa secret", func(t *testing.T) {
 		user := &User{
-			Id:    "user-1",
-			Email: "test@example.com",
-			Name:  "Test User",
+			Id:        "user-1",
+			Email:     "test@example.com",
+			Name:      "Test User",
+			MFASecret: "JBSWY3DPEHPK3PXP",
 		}
 
 		err := user.EncryptSensitiveData(fieldEncrypt)
@@ -28,8 +29,10 @@ func TestUser_EncryptSensitiveData(t *testing.T) {
 
 		assert.NotEqual(t, "test@example.com", user.Email, "email should be encrypted")
 		assert.NotEqual(t, "Test User", user.Name, "name should be encrypted")
+		assert.NotEqual(t, "JBSWY3DPEHPK3PXP", user.MFASecret, "mfa secret should be encrypted")
 		assert.NotEmpty(t, user.Email, "encrypted email should not be empty")
 		assert.NotEmpty(t, user.Name, "encrypted name should not be empty")
+		assert.NotEmpty(t, user.MFASecret, "encrypted mfa secret should not be empty")
 	})
 
 	t.Run("encrypt empty email and name", func(t *testing.T) {
@@ -78,9 +81,10 @@ func TestUser_EncryptSensitiveData(t *testing.T) {
 
 	t.Run("nil encryptor returns no error", func(t *testing.T) {
 		user := &User{
-			Id:    "user-5",
-			Email: "test@example.com",
-			Name:  "Test User",
+			Id:        "user-5",
+			Email:     "test@example.com",
+			Name:      "Test User",
+			MFASecret: "JBSWY3DPEHPK3PXP",
 		}
 
 		err := user.EncryptSensitiveData(nil)
@@ -88,6 +92,7 @@ func TestUser_EncryptSensitiveData(t *testing.T) {
 
 		assert.Equal(t, "test@example.com", user.Email, "email should remain unchanged with nil encryptor")
 		assert.Equal(t, "Test User", user.Name, "name should remain unchanged with nil encryptor")
+		assert.Equal(t, "JBSWY3DPEHPK3PXP", user.MFASecret, "mfa secret should remain unchanged with nil encryptor")
 	})
 }
 
@@ -98,14 +103,16 @@ func TestUser_DecryptSensitiveData(t *testing.T) {
 	fieldEncrypt, err := crypt.NewFieldEncrypt(key)
 	require.NoError(t, err)
 
-	t.Run("decrypt email and name", func(t *testing.T) {
+	t.Run("decrypt email name and mfa secret", func(t *testing.T) {
 		originalEmail := "test@example.com"
 		originalName := "Test User"
+		originalMFASecret := "JBSWY3DPEHPK3PXP"
 
 		user := &User{
-			Id:    "user-1",
-			Email: originalEmail,
-			Name:  originalName,
+			Id:        "user-1",
+			Email:     originalEmail,
+			Name:      originalName,
+			MFASecret: originalMFASecret,
 		}
 
 		err := user.EncryptSensitiveData(fieldEncrypt)
@@ -116,6 +123,7 @@ func TestUser_DecryptSensitiveData(t *testing.T) {
 
 		assert.Equal(t, originalEmail, user.Email, "decrypted email should match original")
 		assert.Equal(t, originalName, user.Name, "decrypted name should match original")
+		assert.Equal(t, originalMFASecret, user.MFASecret, "decrypted mfa secret should match original")
 	})
 
 	t.Run("decrypt empty email and name", func(t *testing.T) {
@@ -172,9 +180,10 @@ func TestUser_DecryptSensitiveData(t *testing.T) {
 
 	t.Run("nil encryptor returns no error", func(t *testing.T) {
 		user := &User{
-			Id:    "user-5",
-			Email: "test@example.com",
-			Name:  "Test User",
+			Id:        "user-5",
+			Email:     "test@example.com",
+			Name:      "Test User",
+			MFASecret: "JBSWY3DPEHPK3PXP",
 		}
 
 		err := user.DecryptSensitiveData(nil)
@@ -182,6 +191,7 @@ func TestUser_DecryptSensitiveData(t *testing.T) {
 
 		assert.Equal(t, "test@example.com", user.Email, "email should remain unchanged with nil encryptor")
 		assert.Equal(t, "Test User", user.Name, "name should remain unchanged with nil encryptor")
+		assert.Equal(t, "JBSWY3DPEHPK3PXP", user.MFASecret, "mfa secret should remain unchanged with nil encryptor")
 	})
 
 	t.Run("decrypt with invalid ciphertext returns error", func(t *testing.T) {
@@ -194,6 +204,28 @@ func TestUser_DecryptSensitiveData(t *testing.T) {
 		err := user.DecryptSensitiveData(fieldEncrypt)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "decrypt email")
+	})
+
+	t.Run("decrypt legacy plaintext mfa secret", func(t *testing.T) {
+		user := &User{
+			Id:        "user-legacy-mfa",
+			MFASecret: "JBSWY3DPEHPK3PXP",
+		}
+
+		err := user.DecryptSensitiveData(fieldEncrypt)
+		require.NoError(t, err)
+		assert.Equal(t, "JBSWY3DPEHPK3PXP", user.MFASecret)
+	})
+
+	t.Run("decrypt invalid mfa secret ciphertext returns error", func(t *testing.T) {
+		user := &User{
+			Id:        "user-invalid-mfa",
+			MFASecret: "not-valid-base64-ciphertext!!!",
+		}
+
+		err := user.DecryptSensitiveData(fieldEncrypt)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decrypt mfa secret")
 	})
 
 	t.Run("decrypt with wrong key returns error", func(t *testing.T) {

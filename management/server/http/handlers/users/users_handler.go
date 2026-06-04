@@ -290,7 +290,7 @@ func (h *handler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := toUserWithPermissionsResponse(user, userAuth.UserId)
-	if resp.MfaEnabled && !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt) && !mfa.IsOIDCSessionValid(userAuth.UserId) {
+	if resp.MfaEnabled && !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt) && !mfa.ConsumeOIDCSession(userAuth.UserId, userAuth.IssuedAt) {
 		resp.MfaRequired = true
 	}
 

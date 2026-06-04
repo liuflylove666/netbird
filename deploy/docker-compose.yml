@@ -19,7 +19,7 @@ services:
 
   dashboard:
     build:
-      context: ../dashboard
+      context: ../../dashboard
       dockerfile: Dockerfile.multistage
     image: netbird-dashboard:dev
     container_name: netbird-dashboard
