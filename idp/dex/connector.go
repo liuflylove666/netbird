@@ -4,9 +4,11 @@ package dex
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/dexidp/dex/storage"
@@ -730,7 +732,7 @@ func CreateLDAPUser(cfg *LDAPConnectorConfig, email, password, fullName string) 
 		givenName = strings.Join(nameParts[:len(nameParts)-1], " ")
 	}
 
-	dn := fmt.Sprintf("uid=%s,%s", ldapv3.EscapeFilter(uid), cfg.UserSearchBaseDN)
+	dn := userDN(uid, cfg.UserSearchBaseDN)
 
 	addReq := ldapv3.NewAddRequest(dn, nil)
 	addReq.Attribute("objectClass", []string{"inetOrgPerson", "posixAccount", "shadowAccount"})
@@ -770,7 +772,7 @@ func DeleteLDAPUser(cfg *LDAPConnectorConfig, email string) error {
 
 	parts := strings.SplitN(email, "@", 2)
 	uid := parts[0]
-	dn := fmt.Sprintf("uid=%s,%s", ldapv3.EscapeFilter(uid), cfg.UserSearchBaseDN)
+	dn := userDN(uid, cfg.UserSearchBaseDN)
 
 	if err := conn.Del(ldapv3.NewDelRequest(dn, nil)); err != nil {
 		return fmt.Errorf("failed to delete LDAP user %q: %w", uid, err)
@@ -794,11 +796,12 @@ func dialLDAP(cfg *LDAPConnectorConfig) (*ldapv3.Conn, error) {
 			return nil, err
 		}
 		if cfg.StartTLS {
-			tlsHost := strings.Split(host, ":")[0]
-			if err := conn.StartTLS(&tls.Config{
-				ServerName:         tlsHost,
-				InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec
-			}); err != nil {
+			tlsConfig, err := ldapTLSConfig(cfg, host)
+			if err != nil {
+				conn.Close()
+				return nil, err
+			}
+			if err := conn.StartTLS(tlsConfig); err != nil {
 				conn.Close()
 				return nil, fmt.Errorf("StartTLS failed: %w", err)
 			}
@@ -806,11 +809,46 @@ func dialLDAP(cfg *LDAPConnectorConfig) (*ldapv3.Conn, error) {
 		return conn, nil
 	}
 
+	tlsConfig, err := ldapTLSConfig(cfg, host)
+	if err != nil {
+		return nil, err
+	}
+	return ldapv3.DialTLS("tcp", host, tlsConfig)
+}
+
+func ldapTLSConfig(cfg *LDAPConnectorConfig, host string) (*tls.Config, error) {
 	tlsHost := strings.Split(host, ":")[0]
-	return ldapv3.DialTLS("tcp", host, &tls.Config{
+	tlsConfig := &tls.Config{
 		ServerName:         tlsHost,
 		InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec
-	})
+	}
+	if cfg.RootCA == "" {
+		return tlsConfig, nil
+	}
+
+	rootCAs, err := rootCAPool(cfg.RootCA)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.RootCAs = rootCAs
+	return tlsConfig, nil
+}
+
+func rootCAPool(rootCA string) (*x509.CertPool, error) {
+	pemData := []byte(rootCA)
+	if !strings.Contains(rootCA, "BEGIN CERTIFICATE") {
+		data, err := os.ReadFile(rootCA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read LDAP rootCA: %w", err)
+		}
+		pemData = data
+	}
+
+	pool := x509.NewCertPool()
+	if ok := pool.AppendCertsFromPEM(pemData); !ok {
+		return nil, fmt.Errorf("failed to parse LDAP rootCA PEM")
+	}
+	return pool, nil
 }
 
 // UpdateLDAPUserPassword changes a user's password in the LDAP directory.
@@ -821,7 +859,7 @@ func UpdateLDAPUserPassword(cfg *LDAPConnectorConfig, uid, oldPassword, newPassw
 		return fmt.Errorf("LDAP connector config is nil")
 	}
 
-	userDN := fmt.Sprintf("uid=%s,%s", ldapv3.EscapeFilter(uid), cfg.UserSearchBaseDN)
+	userDN := userDN(uid, cfg.UserSearchBaseDN)
 
 	verifyConn, err := dialLDAP(cfg)
 	if err != nil {
@@ -858,7 +896,7 @@ func ResetLDAPUserPassword(cfg *LDAPConnectorConfig, uid, newPassword string) er
 		return fmt.Errorf("LDAP connector config is nil")
 	}
 
-	userDN := fmt.Sprintf("uid=%s,%s", ldapv3.EscapeFilter(uid), cfg.UserSearchBaseDN)
+	userDN := userDN(uid, cfg.UserSearchBaseDN)
 
 	conn, err := dialLDAP(cfg)
 	if err != nil {
@@ -882,8 +920,17 @@ func ResetLDAPUserPassword(cfg *LDAPConnectorConfig, uid, newPassword string) er
 // CheckUserInLDAPGroups checks if a user is a member of at least one of the required groups.
 // Returns true if requiredGroups is empty (no restriction).
 func CheckUserInLDAPGroups(cfg *LDAPConnectorConfig, email string) (bool, error) {
+	parts := strings.SplitN(email, "@", 2)
+	return CheckUserInLDAPGroupsByUID(cfg, parts[0])
+}
+
+// CheckUserInLDAPGroupsByUID checks required LDAP group membership using the LDAP uid directly.
+func CheckUserInLDAPGroupsByUID(cfg *LDAPConnectorConfig, uid string) (bool, error) {
 	if cfg == nil || len(cfg.RequiredGroups) == 0 {
 		return true, nil
+	}
+	if uid == "" {
+		return false, fmt.Errorf("LDAP user uid is required")
 	}
 	if cfg.GroupSearchBaseDN == "" {
 		return false, fmt.Errorf("group search not configured but requiredGroups is set")
@@ -899,9 +946,7 @@ func CheckUserInLDAPGroups(cfg *LDAPConnectorConfig, email string) (bool, error)
 		return false, fmt.Errorf("failed to bind to LDAP: %w", err)
 	}
 
-	parts := strings.SplitN(email, "@", 2)
-	uid := parts[0]
-	userDN := fmt.Sprintf("uid=%s,%s", ldapv3.EscapeFilter(uid), cfg.UserSearchBaseDN)
+	userDN := userDN(uid, cfg.UserSearchBaseDN)
 
 	groupAttr := cfg.GroupSearchGroupAttr
 	if groupAttr == "" {
@@ -913,7 +958,7 @@ func CheckUserInLDAPGroups(cfg *LDAPConnectorConfig, email string) (bool, error)
 	}
 
 	for _, requiredGroup := range cfg.RequiredGroups {
-		groupDN := fmt.Sprintf("cn=%s,%s", ldapv3.EscapeFilter(requiredGroup), cfg.GroupSearchBaseDN)
+		groupDN := groupDN(requiredGroup, cfg.GroupSearchBaseDN)
 		searchReq := ldapv3.NewSearchRequest(
 			groupDN,
 			ldapv3.ScopeBaseObject, ldapv3.NeverDerefAliases, 1, 0, false,
@@ -993,13 +1038,13 @@ func CreateLDAPGroup(cfg *LDAPConnectorConfig, groupName string) error {
 		return fmt.Errorf("failed to bind to LDAP: %w", err)
 	}
 
-	dn := fmt.Sprintf("cn=%s,%s", ldapv3.EscapeFilter(groupName), cfg.GroupSearchBaseDN)
+	dn := groupDN(groupName, cfg.GroupSearchBaseDN)
 
 	addReq := ldapv3.NewAddRequest(dn, nil)
 	addReq.Attribute("objectClass", []string{"groupOfNames"})
 	addReq.Attribute("cn", []string{groupName})
 	// groupOfNames requires at least one member; use a placeholder that will be replaced
-	addReq.Attribute("member", []string{""})
+	addReq.Attribute("member", []string{emptyGroupPlaceholderDN(cfg.GroupSearchBaseDN)})
 
 	if err := conn.Add(addReq); err != nil {
 		return fmt.Errorf("failed to create LDAP group %q: %w", groupName, err)
@@ -1026,10 +1071,10 @@ func AddUserToLDAPGroups(cfg *LDAPConnectorConfig, email string, groupNames []st
 
 	parts := strings.SplitN(email, "@", 2)
 	uid := parts[0]
-	userDN := fmt.Sprintf("uid=%s,%s", ldapv3.EscapeFilter(uid), cfg.UserSearchBaseDN)
+	userDN := userDN(uid, cfg.UserSearchBaseDN)
 
 	for _, groupName := range groupNames {
-		groupDN := fmt.Sprintf("cn=%s,%s", ldapv3.EscapeFilter(groupName), cfg.GroupSearchBaseDN)
+		groupDN := groupDN(groupName, cfg.GroupSearchBaseDN)
 
 		// Check if group exists
 		searchReq := ldapv3.NewSearchRequest(
@@ -1074,9 +1119,9 @@ func AddUserToLDAPGroups(cfg *LDAPConnectorConfig, email string, groupNames []st
 
 		// Remove empty placeholder member if present
 		for _, m := range members {
-			if m == "" {
+			if isEmptyGroupPlaceholder(m, cfg.GroupSearchBaseDN) {
 				cleanReq := ldapv3.NewModifyRequest(groupDN, nil)
-				cleanReq.Delete("member", []string{""})
+				cleanReq.Delete("member", []string{m})
 				_ = conn.Modify(cleanReq) // best effort
 				break
 			}
@@ -1103,7 +1148,7 @@ func RemoveUserFromLDAPGroups(cfg *LDAPConnectorConfig, email string) error {
 
 	parts := strings.SplitN(email, "@", 2)
 	uid := parts[0]
-	userDN := fmt.Sprintf("uid=%s,%s", ldapv3.EscapeFilter(uid), cfg.UserSearchBaseDN)
+	userDN := userDN(uid, cfg.UserSearchBaseDN)
 
 	// Find all groups containing this user
 	searchReq := ldapv3.NewSearchRequest(
@@ -1123,9 +1168,9 @@ func RemoveUserFromLDAPGroups(cfg *LDAPConnectorConfig, email string) error {
 		modReq := ldapv3.NewModifyRequest(entry.DN, nil)
 		modReq.Delete("member", []string{userDN})
 		if err := conn.Modify(modReq); err != nil {
-			// If group requires at least one member, add placeholder
+			// If group requires at least one member, add a valid placeholder DN.
 			addPlaceholder := ldapv3.NewModifyRequest(entry.DN, nil)
-			addPlaceholder.Add("member", []string{""})
+			addPlaceholder.Add("member", []string{emptyGroupPlaceholderDN(cfg.GroupSearchBaseDN)})
 			_ = conn.Modify(addPlaceholder)
 			retryDel := ldapv3.NewModifyRequest(entry.DN, nil)
 			retryDel.Delete("member", []string{userDN})
@@ -1144,4 +1189,20 @@ func generateUIDNumber(uid string) int {
 		h = -h
 	}
 	return (h % 55535) + 10000
+}
+
+func userDN(uid, baseDN string) string {
+	return fmt.Sprintf("uid=%s,%s", ldapv3.EscapeDN(uid), baseDN)
+}
+
+func groupDN(groupName, baseDN string) string {
+	return fmt.Sprintf("cn=%s,%s", ldapv3.EscapeDN(groupName), baseDN)
+}
+
+func emptyGroupPlaceholderDN(groupBaseDN string) string {
+	return groupDN("netbird-empty-group-placeholder", groupBaseDN)
+}
+
+func isEmptyGroupPlaceholder(memberDN, groupBaseDN string) bool {
+	return strings.EqualFold(memberDN, emptyGroupPlaceholderDN(groupBaseDN))
 }

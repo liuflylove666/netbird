@@ -666,6 +666,11 @@ components:
           description: The invite link to be shared with the user. Only returned when the invite is created or regenerated.
           type: string
           example: nbi_Xk5Lz9mP2vQwRtYu1aN3bC4dE5fGh0ABC123
+        password:
+          description: User's password. Only present when an external IdP user is created with a password.
+          type: string
+          format: password
+          example: SecurePass123!
       required:
         - id
         - email

@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/netbirdio/netbird/management/server/types"
 )
 
 const (
-	SessionTTL      = 12 * time.Hour
 	OIDCSessionTTL  = 5 * time.Minute
 	OIDCTokenSkew   = time.Minute
 	MaxAttempts     = 5
@@ -20,6 +21,11 @@ type sessionEntry struct {
 	tokenIat   time.Time
 }
 
+type oidcSessionKey struct {
+	userID     string
+	contextKey string
+}
+
 type failureEntry struct {
 	attempts int
 	lockedAt time.Time
@@ -29,7 +35,7 @@ var (
 	sessions   = make(map[string]sessionEntry)
 	sessionsMu sync.RWMutex
 
-	oidcSessions   = make(map[string]time.Time)
+	oidcSessions   = make(map[oidcSessionKey]time.Time)
 	oidcSessionsMu sync.RWMutex
 
 	failures   = make(map[string]failureEntry)
@@ -45,18 +51,10 @@ func cleanupLoop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		now := time.Now()
-		sessionsMu.Lock()
-		for uid, entry := range sessions {
-			if now.Sub(entry.verifiedAt) > SessionTTL {
-				delete(sessions, uid)
-			}
-		}
-		sessionsMu.Unlock()
-
 		oidcSessionsMu.Lock()
-		for uid, verifiedAt := range oidcSessions {
+		for key, verifiedAt := range oidcSessions {
 			if now.Sub(verifiedAt) > OIDCSessionTTL {
-				delete(oidcSessions, uid)
+				delete(oidcSessions, key)
 			}
 		}
 		oidcSessionsMu.Unlock()
@@ -69,6 +67,16 @@ func cleanupLoop() {
 		}
 		failuresMu.Unlock()
 	}
+}
+
+// SessionTTLFromSettings returns the MFA verification lifetime configured for
+// the account. A zero duration means the MFA session is only bound to the
+// current JWT login session and has no independent MFA-specific expiry.
+func SessionTTLFromSettings(settings *types.Settings) time.Duration {
+	if settings == nil || !settings.PeerLoginExpirationEnabled || settings.PeerLoginExpiration <= 0 {
+		return 0
+	}
+	return settings.PeerLoginExpiration
 }
 
 // SetSession records MFA verification for a specific login session (identified by token iat).
@@ -84,14 +92,14 @@ func SetSession(userID string, tokenIat time.Time) {
 // IsSessionValid checks if MFA was verified for the current login session.
 // tokenIat is the JWT token's issued-at time — a new login produces a new iat,
 // invalidating any previous MFA verification.
-func IsSessionValid(userID string, tokenIat time.Time) bool {
+func IsSessionValid(userID string, tokenIat time.Time, ttl time.Duration) bool {
 	sessionsMu.RLock()
 	defer sessionsMu.RUnlock()
 	entry, ok := sessions[userID]
 	if !ok {
 		return false
 	}
-	if time.Since(entry.verifiedAt) > SessionTTL {
+	if ttl > 0 && time.Since(entry.verifiedAt) > ttl {
 		return false
 	}
 	return entry.tokenIat.Equal(tokenIat)
@@ -107,29 +115,29 @@ func ClearSession(userID string) {
 // SetOIDCSession records that a user passed MFA during the OIDC login flow (MFA Gate).
 // The session is a short-lived bridge that must be consumed by the first JWT
 // issued by that OIDC flow, then it is converted into a token-iat-bound session.
-func SetOIDCSession(userID string) {
+func SetOIDCSession(userID, contextKey string) {
 	oidcSessionsMu.Lock()
 	defer oidcSessionsMu.Unlock()
-	oidcSessions[userID] = time.Now()
+	oidcSessions[newOIDCSessionKey(userID, contextKey)] = time.Now()
 }
 
 // ConsumeOIDCSession binds a recent OIDC-layer MFA verification to the JWT
 // created by that login. It returns false for old sessions, zero iat values,
 // or JWTs issued outside the narrow post-MFA exchange window.
-func ConsumeOIDCSession(userID string, tokenIat time.Time) bool {
+func ConsumeOIDCSession(userID string, tokenIat time.Time, contextKey string) bool {
 	if tokenIat.IsZero() {
 		return false
 	}
 
 	now := time.Now()
 	oidcSessionsMu.Lock()
-	verifiedAt, ok := oidcSessions[userID]
+	sessionKey, verifiedAt, ok := findOIDCSessionLocked(userID, contextKey)
 	if !ok {
 		oidcSessionsMu.Unlock()
 		return false
 	}
 	if now.Sub(verifiedAt) > OIDCSessionTTL {
-		delete(oidcSessions, userID)
+		delete(oidcSessions, sessionKey)
 		oidcSessionsMu.Unlock()
 		return false
 	}
@@ -137,7 +145,7 @@ func ConsumeOIDCSession(userID string, tokenIat time.Time) bool {
 		oidcSessionsMu.Unlock()
 		return false
 	}
-	delete(oidcSessions, userID)
+	delete(oidcSessions, sessionKey)
 	oidcSessionsMu.Unlock()
 
 	SetSession(userID, tokenIat)
@@ -148,7 +156,28 @@ func ConsumeOIDCSession(userID string, tokenIat time.Time) bool {
 func ClearOIDCSession(userID string) {
 	oidcSessionsMu.Lock()
 	defer oidcSessionsMu.Unlock()
-	delete(oidcSessions, userID)
+	for key := range oidcSessions {
+		if key.userID == userID {
+			delete(oidcSessions, key)
+		}
+	}
+}
+
+func newOIDCSessionKey(userID, contextKey string) oidcSessionKey {
+	return oidcSessionKey{userID: userID, contextKey: contextKey}
+}
+
+func findOIDCSessionLocked(userID, contextKey string) (oidcSessionKey, time.Time, bool) {
+	if contextKey != "" {
+		key := newOIDCSessionKey(userID, contextKey)
+		if verifiedAt, ok := oidcSessions[key]; ok {
+			return key, verifiedAt, true
+		}
+	}
+
+	key := newOIDCSessionKey(userID, "")
+	verifiedAt, ok := oidcSessions[key]
+	return key, verifiedAt, ok
 }
 
 // CheckRateLimit returns an error if the user has exceeded MFA attempt limits.

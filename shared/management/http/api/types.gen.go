@@ -4825,6 +4825,9 @@ type UserInvite struct {
 	// Name User's full name
 	Name string `json:"name"`
 
+	// Password User's password. Only present when an external IdP user is created with a password.
+	Password *string `json:"password,omitempty"`
+
 	// Role User's NetBird account role
 	Role string `json:"role"`
 }

@@ -141,6 +141,10 @@ func (c *ClaimsExtractor) ToUserAuth(token *jwt.Token) (auth.UserAuth, error) {
 		userAuth.IssuedAt = iat.Time
 	}
 
+	if nonce, ok := claims["nonce"].(string); ok {
+		userAuth.MFAContext = nonce
+	}
+
 	return userAuth, nil
 }
 

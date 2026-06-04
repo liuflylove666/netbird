@@ -106,12 +106,17 @@ func (m *AuthMiddleware) Handler(h http.Handler) http.Handler {
 			}
 			h.ServeHTTP(w, r)
 		case "token":
-			if err := m.checkPATFromRequest(r, authHeader); err != nil {
+			user, err := m.checkPATFromRequest(r, authHeader)
+			if err != nil {
 				log.WithContext(r.Context()).Debugf("Error when validating PAT: %s", err.Error())
 				// Check if it's a status error, otherwise default to Unauthorized
 				if _, ok := status.FromError(err); !ok {
 					err = status.Errorf(status.Unauthorized, "token invalid")
 				}
+				util.WriteError(r.Context(), err, w)
+				return
+			}
+			if err := m.enforceMFA(r, user); err != nil {
 				util.WriteError(r.Context(), err, w)
 				return
 			}
@@ -190,29 +195,31 @@ func (m *AuthMiddleware) enforceMFA(r *http.Request, user *types.User) error {
 	if err != nil {
 		return err
 	}
-	if userAuth.IsPAT || isMFAAllowedPath(r.URL.Path, r.Method, userAuth.UserId) {
+	if !userAuth.IsPAT && isMFAAllowedPath(r.URL.Path, r.Method, userAuth.UserId) {
 		return nil
 	}
+
+	var accountSettings *types.Settings
+	if m.getAccountSettings != nil {
+		var err error
+		accountSettings, err = m.getAccountSettings(r.Context(), userAuth.AccountId)
+		if err != nil {
+			return err
+		}
+	}
+	mfaSessionTTL := mfa.SessionTTLFromSettings(accountSettings)
 
 	if user.MFAEnabled {
 		if user.MFASecret == "" {
 			return status.Errorf(status.PreconditionFailed, "MFA setup required")
 		}
-		if !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt) && !mfa.ConsumeOIDCSession(userAuth.UserId, userAuth.IssuedAt) {
+		if !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt, mfaSessionTTL) && !mfa.ConsumeOIDCSession(userAuth.UserId, userAuth.IssuedAt, userAuth.MFAContext) {
 			return status.Errorf(status.PreconditionFailed, "MFA verification required")
 		}
 		return nil
 	}
 
-	if m.getAccountSettings == nil {
-		return nil
-	}
-
-	accountSettings, err := m.getAccountSettings(r.Context(), userAuth.AccountId)
-	if err != nil {
-		return err
-	}
-	if accountSettings.MFARequired {
+	if accountSettings != nil && accountSettings.MFARequired {
 		return status.Errorf(status.PreconditionFailed, "MFA setup required")
 	}
 
@@ -258,10 +265,10 @@ func isMFAAllowedPath(requestPath, method, userID string) bool {
 }
 
 // CheckPATFromRequest checks if the PAT is valid
-func (m *AuthMiddleware) checkPATFromRequest(r *http.Request, authHeaderParts []string) error {
+func (m *AuthMiddleware) checkPATFromRequest(r *http.Request, authHeaderParts []string) (*types.User, error) {
 	token, err := getTokenFromPATRequest(authHeaderParts)
 	if err != nil {
-		return fmt.Errorf("error extracting token: %w", err)
+		return nil, fmt.Errorf("error extracting token: %w", err)
 	}
 
 	if m.patUsageTracker != nil {
@@ -269,21 +276,21 @@ func (m *AuthMiddleware) checkPATFromRequest(r *http.Request, authHeaderParts []
 	}
 
 	if !isTerraformRequest(r) && !m.rateLimiter.Allow(token) {
-		return status.Errorf(status.TooManyRequests, "too many requests")
+		return nil, status.Errorf(status.TooManyRequests, "too many requests")
 	}
 
 	ctx := r.Context()
 	user, pat, accDomain, accCategory, err := m.authManager.GetPATInfo(ctx, token)
 	if err != nil {
-		return fmt.Errorf("invalid Token: %w", err)
+		return nil, fmt.Errorf("invalid Token: %w", err)
 	}
 	if time.Now().After(pat.GetExpirationDate()) {
-		return fmt.Errorf("token expired")
+		return nil, fmt.Errorf("token expired")
 	}
 
 	err = m.authManager.MarkPATUsed(ctx, pat.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	userAuth := auth.UserAuth{
@@ -303,7 +310,7 @@ func (m *AuthMiddleware) checkPATFromRequest(r *http.Request, authHeaderParts []
 
 	// propagates ctx change to upstream middleware
 	*r = *nbcontext.SetUserAuthInRequest(r, userAuth)
-	return nil
+	return user, nil
 }
 
 func isTerraformRequest(r *http.Request) bool {

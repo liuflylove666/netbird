@@ -6,6 +6,8 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,8 +24,15 @@ import (
 type pendingMFA struct {
 	redirectURL string
 	userID      string
+	mfaContext  string
 	createdAt   time.Time
 }
+
+const (
+	mfaSessionCookieName  = "nb_mfa_session"
+	pendingMFATTL         = 5 * time.Minute
+	maxPendingMFASessions = 5000
+)
 
 // Handler wraps a Dex OIDC handler and intercepts authorization-code redirects
 // to enforce TOTP verification for users who have MFA enabled.
@@ -98,22 +107,21 @@ func (h *Handler) interceptForMFA(w http.ResponseWriter, r *http.Request, redire
 	}
 
 	sessionID := uuid.New().String()
-	h.mu.Lock()
-	h.pending[sessionID] = &pendingMFA{
+	h.storePending(sessionID, &pendingMFA{
 		redirectURL: redirectURL,
 		userID:      encodedUserID,
+		mfaContext:  authCodeMFAContext(authCode),
 		createdAt:   time.Now(),
-	}
-	h.mu.Unlock()
+	})
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     "nb_mfa_session",
+		Name:     mfaSessionCookieName,
 		Value:    sessionID,
 		Path:     "/oauth2/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   isHTTPS(r),
-		MaxAge:   300,
+		MaxAge:   int(pendingMFATTL.Seconds()),
 	})
 
 	log.Infof("MFA gate: TOTP verification required for user %s", authCode.Claims.Email)
@@ -122,7 +130,7 @@ func (h *Handler) interceptForMFA(w http.ResponseWriter, r *http.Request, redire
 }
 
 func (h *Handler) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("nb_mfa_session")
+	cookie, err := r.Cookie(mfaSessionCookieName)
 	if err != nil {
 		http.Error(w, "Session expired. Please log in again.", http.StatusBadRequest)
 		return
@@ -132,12 +140,11 @@ func (h *Handler) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	session, ok := h.pending[cookie.Value]
 	h.mu.Unlock()
 
-	if !ok || time.Since(session.createdAt) > 5*time.Minute {
+	if !ok || time.Since(session.createdAt) > pendingMFATTL {
 		if ok {
-			h.mu.Lock()
-			delete(h.pending, cookie.Value)
-			h.mu.Unlock()
+			h.deletePending(cookie.Value)
 		}
+		clearMFACookie(w, r)
 		http.Error(w, "Session expired. Please log in again.", http.StatusBadRequest)
 		return
 	}
@@ -150,6 +157,8 @@ func (h *Handler) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.mgmtStore.GetUserByUserID(r.Context(), nbstore.LockingStrengthNone, session.userID)
 	if err != nil {
+		h.deletePending(cookie.Value)
+		clearMFACookie(w, r)
 		renderMFAForm(w, "User not found. Please log in again.")
 		return
 	}
@@ -167,20 +176,10 @@ func (h *Handler) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	mfa.ClearFailures(session.userID)
 
-	h.mu.Lock()
-	delete(h.pending, cookie.Value)
-	h.mu.Unlock()
+	h.deletePending(cookie.Value)
+	clearMFACookie(w, r)
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "nb_mfa_session",
-		Value:    "",
-		Path:     "/oauth2/",
-		HttpOnly: true,
-		Secure:   isHTTPS(r),
-		MaxAge:   -1,
-	})
-
-	mfa.SetOIDCSession(session.userID)
+	mfa.SetOIDCSession(session.userID, session.mfaContext)
 
 	log.Infof("MFA gate: TOTP verified for user %s", session.userID)
 	http.Redirect(w, r, session.redirectURL, http.StatusFound)
@@ -191,12 +190,47 @@ func (h *Handler) cleanupLoop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		h.mu.Lock()
-		for k, v := range h.pending {
-			if time.Since(v.createdAt) > 5*time.Minute {
-				delete(h.pending, k)
-			}
-		}
+		h.cleanupExpiredPendingLocked(time.Now())
 		h.mu.Unlock()
+	}
+}
+
+func (h *Handler) storePending(sessionID string, session *pendingMFA) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.cleanupExpiredPendingLocked(time.Now())
+	if len(h.pending) >= maxPendingMFASessions {
+		h.evictOldestPendingLocked()
+	}
+	h.pending[sessionID] = session
+}
+
+func (h *Handler) deletePending(sessionID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.pending, sessionID)
+}
+
+func (h *Handler) cleanupExpiredPendingLocked(now time.Time) {
+	for k, v := range h.pending {
+		if now.Sub(v.createdAt) > pendingMFATTL {
+			delete(h.pending, k)
+		}
+	}
+}
+
+func (h *Handler) evictOldestPendingLocked() {
+	var oldestKey string
+	var oldestCreatedAt time.Time
+	for k, v := range h.pending {
+		if oldestKey == "" || v.createdAt.Before(oldestCreatedAt) {
+			oldestKey = k
+			oldestCreatedAt = v.createdAt
+		}
+	}
+	if oldestKey != "" {
+		delete(h.pending, oldestKey)
 	}
 }
 
@@ -222,7 +256,45 @@ func isHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return r.Header.Get("X-Forwarded-Proto") == "https"
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		return false
+	}
+	firstProto := strings.TrimSpace(strings.Split(proto, ",")[0])
+	return strings.EqualFold(firstProto, "https")
+}
+
+func authCodeMFAContext(authCode any) string {
+	value := reflect.ValueOf(authCode)
+	if !value.IsValid() {
+		return ""
+	}
+	for value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return ""
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return ""
+	}
+	nonce := value.FieldByName("Nonce")
+	if !nonce.IsValid() || nonce.Kind() != reflect.String {
+		return ""
+	}
+	return nonce.String()
+}
+
+func clearMFACookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     mfaSessionCookieName,
+		Value:    "",
+		Path:     "/oauth2/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isHTTPS(r),
+		MaxAge:   -1,
+	})
 }
 
 type bufferedWriter struct {

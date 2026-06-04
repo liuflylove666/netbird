@@ -35,7 +35,8 @@ server:
         config:
           host: "openldap:389"
           insecureNoSSL: true
-          insecureSkipVerify: true
+          startTLS: false
+          insecureSkipVerify: false
           bindDN: "cn=admin,dc=example,dc=org"
           bindPW: "adminpassword"
           userSearch:

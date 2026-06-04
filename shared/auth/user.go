@@ -38,4 +38,7 @@ type UserAuth struct {
 	// IssuedAt is the time the JWT token was issued (from the `iat` claim).
 	// Used to tie MFA sessions to specific login sessions.
 	IssuedAt time.Time
+	// MFAContext is an optional stable login-flow identifier extracted from JWT
+	// claims (for example OIDC nonce) and used to bind MFA checks to that flow.
+	MFAContext string
 }

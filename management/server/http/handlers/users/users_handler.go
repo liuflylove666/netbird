@@ -290,11 +290,12 @@ func (h *handler) getCurrentUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := toUserWithPermissionsResponse(user, userAuth.UserId)
-	if resp.MfaEnabled && !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt) && !mfa.ConsumeOIDCSession(userAuth.UserId, userAuth.IssuedAt) {
+	accountSettings, err := h.accountManager.GetStore().GetAccountSettings(ctx, store.LockingStrengthNone, userAuth.AccountId)
+	mfaSessionTTL := mfa.SessionTTLFromSettings(accountSettings)
+	if resp.MfaEnabled && !mfa.IsSessionValid(userAuth.UserId, userAuth.IssuedAt, mfaSessionTTL) && !mfa.ConsumeOIDCSession(userAuth.UserId, userAuth.IssuedAt, userAuth.MFAContext) {
 		resp.MfaRequired = true
 	}
 
-	accountSettings, err := h.accountManager.GetStore().GetAccountSettings(ctx, store.LockingStrengthNone, userAuth.AccountId)
 	if err == nil && accountSettings.MFARequired && !resp.MfaEnabled {
 		resp.MfaSetupRequired = true
 	}

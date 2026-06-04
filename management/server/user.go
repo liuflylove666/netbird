@@ -1021,7 +1021,7 @@ func (am *DefaultAccountManager) checkLDAPGroupRestriction(ctx context.Context, 
 		return nil
 	}
 
-	_, connectorID, err := dex.DecodeDexUserID(userID)
+	rawUID, connectorID, err := dex.DecodeDexUserID(userID)
 	if err != nil || connectorID == "" || connectorID == "local" {
 		return nil
 	}
@@ -1035,7 +1035,7 @@ func (am *DefaultAccountManager) checkLDAPGroupRestriction(ctx context.Context, 
 		return nil
 	}
 
-	isMember, err := dex.CheckUserInLDAPGroups(conn.LDAP, email)
+	isMember, err := dex.CheckUserInLDAPGroupsByUID(conn.LDAP, rawUID)
 	if err != nil {
 		log.WithContext(ctx).Warnf("failed to check LDAP group membership for %s: %v", email, err)
 		return status.Errorf(status.PermissionDenied, "failed to verify group membership")
@@ -1752,12 +1752,13 @@ func (am *DefaultAccountManager) createExternalIdpPreRegistration(ctx context.Co
 
 	log.WithContext(ctx).Infof("created LDAP user %s in directory via connector %s", invite.Email, invite.IdPID)
 
-	if len(invite.LdapGroups) > 0 {
-		if err := dex.AddUserToLDAPGroups(conn.LDAP, invite.Email, invite.LdapGroups); err != nil {
-			log.WithContext(ctx).WithError(err).Warnf("failed to add LDAP user %s to groups %v", invite.Email, invite.LdapGroups)
-		} else {
-			log.WithContext(ctx).Infof("added LDAP user %s to groups %v", invite.Email, invite.LdapGroups)
+	ldapGroups := mergeLDAPGroupNames(conn.LDAP.RequiredGroups, invite.LdapGroups)
+	if len(ldapGroups) > 0 {
+		if err := dex.AddUserToLDAPGroups(conn.LDAP, invite.Email, ldapGroups); err != nil {
+			rollbackLDAPUserCreation(ctx, conn.LDAP, invite.Email)
+			return nil, status.Errorf(status.Internal, "failed to add LDAP user to groups: %v", err)
 		}
+		log.WithContext(ctx).Infof("added LDAP user %s to groups %v", invite.Email, ldapGroups)
 	}
 
 	// Derive the uid from email (same logic as CreateLDAPUser) and encode as Dex user ID
@@ -1771,9 +1772,7 @@ func (am *DefaultAccountManager) createExternalIdpPreRegistration(ctx context.Co
 	newUser.ForcePasswordChange = invite.ForcePasswordChange
 
 	if err := am.Store.SaveUser(ctx, newUser); err != nil {
-		if delErr := dex.DeleteLDAPUser(conn.LDAP, invite.Email); delErr != nil {
-			log.WithContext(ctx).WithError(delErr).Errorf("failed to rollback LDAP user %s after DB save failure", invite.Email)
-		}
+		rollbackLDAPUserCreation(ctx, conn.LDAP, invite.Email)
 		return nil, status.Errorf(status.Internal, "failed to save user record: %v", err)
 	}
 
@@ -1794,8 +1793,38 @@ func (am *DefaultAccountManager) createExternalIdpPreRegistration(ctx context.Co
 			Status:     string(types.UserStatusActive),
 			Issued:     types.UserIssuedAPI,
 			IdPID:      invite.IdPID,
+			Password:   invite.Password,
 		},
 	}, nil
+}
+
+func mergeLDAPGroupNames(groupSets ...[]string) []string {
+	groups := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, groupSet := range groupSets {
+		for _, group := range groupSet {
+			trimmed := strings.TrimSpace(group)
+			if trimmed == "" {
+				continue
+			}
+			key := strings.ToLower(trimmed)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			groups = append(groups, trimmed)
+		}
+	}
+	return groups
+}
+
+func rollbackLDAPUserCreation(ctx context.Context, cfg *dex.LDAPConnectorConfig, email string) {
+	if rmErr := dex.RemoveUserFromLDAPGroups(cfg, email); rmErr != nil {
+		log.WithContext(ctx).WithError(rmErr).Warnf("failed to remove LDAP user %s from groups during rollback", email)
+	}
+	if delErr := dex.DeleteLDAPUser(cfg, email); delErr != nil {
+		log.WithContext(ctx).WithError(delErr).Errorf("failed to rollback LDAP user %s", email)
+	}
 }
 
 // GetUserInviteInfo retrieves invite information from a token (public endpoint).

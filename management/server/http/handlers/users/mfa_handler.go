@@ -281,8 +281,15 @@ func (h *mfaHandler) mfaStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	accountSettings, err := h.accountManager.GetStore().GetAccountSettings(r.Context(), store.LockingStrengthNone, userAuth.AccountId)
+	if err != nil {
+		util.WriteError(r.Context(), err, w)
+		return
+	}
+	mfaSessionTTL := mfa.SessionTTLFromSettings(accountSettings)
+
 	util.WriteJSONObject(r.Context(), w, &mfaStatusResponse{
 		Enabled:  userRecord.MFAEnabled,
-		Verified: mfa.IsSessionValid(targetUserID, userAuth.IssuedAt) || mfa.ConsumeOIDCSession(targetUserID, userAuth.IssuedAt),
+		Verified: mfa.IsSessionValid(targetUserID, userAuth.IssuedAt, mfaSessionTTL) || mfa.ConsumeOIDCSession(targetUserID, userAuth.IssuedAt, userAuth.MFAContext),
 	})
 }

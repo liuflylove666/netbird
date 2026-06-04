@@ -40,6 +40,10 @@ func toUserInviteResponse(invite *types.UserInvite) api.UserInvite {
 	if invite.UserInfo.IdPID != "" {
 		idpID = &invite.UserInfo.IdPID
 	}
+	var password *string
+	if invite.UserInfo.Password != "" {
+		password = &invite.UserInfo.Password
+	}
 	return api.UserInvite{
 		Id:          invite.UserInfo.ID,
 		Email:       invite.UserInfo.Email,
@@ -51,6 +55,7 @@ func toUserInviteResponse(invite *types.UserInvite) api.UserInvite {
 		Expired:     time.Now().After(invite.InviteExpiresAt),
 		InviteToken: inviteLink,
 		IdpId:       idpID,
+		Password:    password,
 	}
 }
 
