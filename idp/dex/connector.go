@@ -59,6 +59,8 @@ type LDAPConnectorConfig struct {
 	GroupSearchNameAttr  string `json:"groupSearchNameAttr,omitempty"`
 	// RequiredGroups restricts login to users who are members of at least one of these groups.
 	RequiredGroups []string `json:"requiredGroups,omitempty"`
+	// RequiredGroupsSet distinguishes an explicit empty update from an omitted field.
+	RequiredGroupsSet bool `json:"-"`
 }
 
 // CreateConnector creates a new connector in Dex storage.
@@ -248,8 +250,12 @@ func overlayConnectorConfig(oldConfig []byte, cfg *ConnectorConfig) ([]byte, err
 			m["groupSearch"] = gs
 		}
 
-		if cfg.LDAP.RequiredGroups != nil {
-			m["requiredGroups"] = cfg.LDAP.RequiredGroups
+		if cfg.LDAP.RequiredGroupsSet || cfg.LDAP.RequiredGroups != nil {
+			requiredGroups := cfg.LDAP.RequiredGroups
+			if requiredGroups == nil {
+				requiredGroups = []string{}
+			}
+			m["requiredGroups"] = requiredGroups
 		}
 
 		return encodeConnectorConfig(m)
@@ -575,6 +581,7 @@ func parseLDAPConfigMap(m map[string]interface{}) *LDAPConnectorConfig {
 		}
 	}
 	if rg, ok := m["requiredGroups"].([]interface{}); ok {
+		l.RequiredGroupsSet = true
 		for _, g := range rg {
 			if s, ok := g.(string); ok {
 				l.RequiredGroups = append(l.RequiredGroups, s)

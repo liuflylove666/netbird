@@ -8,16 +8,16 @@ import (
 
 // Identity provider validation errors
 var (
-	ErrIdentityProviderNameRequired      = errors.New("identity provider name is required")
-	ErrIdentityProviderTypeRequired      = errors.New("identity provider type is required")
-	ErrIdentityProviderTypeUnsupported   = errors.New("unsupported identity provider type")
-	ErrIdentityProviderIssuerRequired    = errors.New("identity provider issuer is required")
-	ErrIdentityProviderIssuerInvalid     = errors.New("identity provider issuer must be a valid URL")
-	ErrIdentityProviderIssuerUnreachable = errors.New("identity provider issuer is unreachable")
-	ErrIdentityProviderIssuerMismatch    = errors.New("identity provider issuer does not match the issuer returned by the provider")
-	ErrIdentityProviderClientIDRequired  = errors.New("identity provider client ID is required")
-	ErrIdentityProviderLDAPHostRequired  = errors.New("LDAP host is required")
-	ErrIdentityProviderLDAPBindDNRequired = errors.New("LDAP bind DN is required")
+	ErrIdentityProviderNameRequired                 = errors.New("identity provider name is required")
+	ErrIdentityProviderTypeRequired                 = errors.New("identity provider type is required")
+	ErrIdentityProviderTypeUnsupported              = errors.New("unsupported identity provider type")
+	ErrIdentityProviderIssuerRequired               = errors.New("identity provider issuer is required")
+	ErrIdentityProviderIssuerInvalid                = errors.New("identity provider issuer must be a valid URL")
+	ErrIdentityProviderIssuerUnreachable            = errors.New("identity provider issuer is unreachable")
+	ErrIdentityProviderIssuerMismatch               = errors.New("identity provider issuer does not match the issuer returned by the provider")
+	ErrIdentityProviderClientIDRequired             = errors.New("identity provider client ID is required")
+	ErrIdentityProviderLDAPHostRequired             = errors.New("LDAP host is required")
+	ErrIdentityProviderLDAPBindDNRequired           = errors.New("LDAP bind DN is required")
 	ErrIdentityProviderLDAPUserSearchBaseDNRequired = errors.New("LDAP user search base DN is required")
 )
 
@@ -67,19 +67,19 @@ type IdentityProvider struct {
 	ClientSecret string
 
 	// LDAP-specific fields (only used when Type == "ldap")
-	LDAPHost               string `gorm:"column:ldap_host"`
-	LDAPInsecureNoSSL      bool   `gorm:"column:ldap_insecure_no_ssl"`
-	LDAPInsecureSkipVerify bool   `gorm:"column:ldap_insecure_skip_verify"`
-	LDAPStartTLS           bool   `gorm:"column:ldap_start_tls"`
-	LDAPRootCA             string `gorm:"column:ldap_root_ca"`
-	LDAPBindDN             string `gorm:"column:ldap_bind_dn"`
-	LDAPBindPW             string `gorm:"column:ldap_bind_pw"`
-	LDAPUserSearchBaseDN    string `gorm:"column:ldap_user_search_base_dn"`
-	LDAPUserSearchFilter    string `gorm:"column:ldap_user_search_filter"`
-	LDAPUserSearchUsername  string `gorm:"column:ldap_user_search_username"`
-	LDAPUserSearchIDAttr    string `gorm:"column:ldap_user_search_id_attr"`
-	LDAPUserSearchEmailAttr string `gorm:"column:ldap_user_search_email_attr"`
-	LDAPUserSearchNameAttr  string `gorm:"column:ldap_user_search_name_attr"`
+	LDAPHost                 string `gorm:"column:ldap_host"`
+	LDAPInsecureNoSSL        bool   `gorm:"column:ldap_insecure_no_ssl"`
+	LDAPInsecureSkipVerify   bool   `gorm:"column:ldap_insecure_skip_verify"`
+	LDAPStartTLS             bool   `gorm:"column:ldap_start_tls"`
+	LDAPRootCA               string `gorm:"column:ldap_root_ca"`
+	LDAPBindDN               string `gorm:"column:ldap_bind_dn"`
+	LDAPBindPW               string `gorm:"column:ldap_bind_pw"`
+	LDAPUserSearchBaseDN     string `gorm:"column:ldap_user_search_base_dn"`
+	LDAPUserSearchFilter     string `gorm:"column:ldap_user_search_filter"`
+	LDAPUserSearchUsername   string `gorm:"column:ldap_user_search_username"`
+	LDAPUserSearchIDAttr     string `gorm:"column:ldap_user_search_id_attr"`
+	LDAPUserSearchEmailAttr  string `gorm:"column:ldap_user_search_email_attr"`
+	LDAPUserSearchNameAttr   string `gorm:"column:ldap_user_search_name_attr"`
 	LDAPGroupSearchBaseDN    string `gorm:"column:ldap_group_search_base_dn"`
 	LDAPGroupSearchFilter    string `gorm:"column:ldap_group_search_filter"`
 	LDAPGroupSearchUserAttr  string `gorm:"column:ldap_group_search_user_attr"`
@@ -87,6 +87,8 @@ type IdentityProvider struct {
 	LDAPGroupSearchNameAttr  string `gorm:"column:ldap_group_search_name_attr"`
 	// LDAPRequiredGroups is a comma-separated list of group names that restrict login.
 	LDAPRequiredGroups string `gorm:"column:ldap_required_groups"`
+	// LDAPRequiredGroupsSet tracks whether the API request explicitly included required groups.
+	LDAPRequiredGroupsSet bool `json:"-" gorm:"-"`
 }
 
 // GetRequiredGroups returns the required groups as a string slice.
@@ -94,12 +96,33 @@ func (idp *IdentityProvider) GetRequiredGroups() []string {
 	if idp.LDAPRequiredGroups == "" {
 		return nil
 	}
-	return strings.Split(idp.LDAPRequiredGroups, ",")
+	groups := strings.Split(idp.LDAPRequiredGroups, ",")
+	result := make([]string, 0, len(groups))
+	for _, group := range groups {
+		group = strings.TrimSpace(group)
+		if group != "" {
+			result = append(result, group)
+		}
+	}
+	return result
 }
 
 // SetRequiredGroups sets the required groups from a string slice.
 func (idp *IdentityProvider) SetRequiredGroups(groups []string) {
-	idp.LDAPRequiredGroups = strings.Join(groups, ",")
+	cleanGroups := make([]string, 0, len(groups))
+	seen := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if _, ok := seen[group]; ok {
+			continue
+		}
+		seen[group] = struct{}{}
+		cleanGroups = append(cleanGroups, group)
+	}
+	idp.LDAPRequiredGroups = strings.Join(cleanGroups, ",")
 }
 
 // Copy returns a copy of the IdentityProvider
@@ -132,6 +155,7 @@ func (idp *IdentityProvider) Copy() *IdentityProvider {
 		LDAPGroupSearchGroupAttr: idp.LDAPGroupSearchGroupAttr,
 		LDAPGroupSearchNameAttr:  idp.LDAPGroupSearchNameAttr,
 		LDAPRequiredGroups:       idp.LDAPRequiredGroups,
+		LDAPRequiredGroupsSet:    idp.LDAPRequiredGroupsSet,
 	}
 	return c
 }

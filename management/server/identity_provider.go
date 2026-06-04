@@ -315,6 +315,7 @@ func connectorConfigToIdentityProvider(conn *dex.ConnectorConfig, accountID stri
 		idp.LDAPGroupSearchUserAttr = conn.LDAP.GroupSearchUserAttr
 		idp.LDAPGroupSearchGroupAttr = conn.LDAP.GroupSearchGroupAttr
 		idp.LDAPGroupSearchNameAttr = conn.LDAP.GroupSearchNameAttr
+		idp.LDAPRequiredGroupsSet = conn.LDAP.RequiredGroupsSet
 		idp.SetRequiredGroups(conn.LDAP.RequiredGroups)
 	}
 	return idp
@@ -331,6 +332,12 @@ func identityProviderToConnectorConfig(idpConfig *types.IdentityProvider) *dex.C
 		ClientSecret: idpConfig.ClientSecret,
 	}
 	if idpConfig.Type == types.IdentityProviderTypeLDAP {
+		requiredGroups := idpConfig.GetRequiredGroups()
+		requiredGroupsSet := idpConfig.LDAPRequiredGroupsSet || len(requiredGroups) > 0
+		if idpConfig.LDAPRequiredGroupsSet && requiredGroups == nil {
+			requiredGroups = []string{}
+		}
+
 		cfg.LDAP = &dex.LDAPConnectorConfig{
 			Host:                 idpConfig.LDAPHost,
 			InsecureNoSSL:        idpConfig.LDAPInsecureNoSSL,
@@ -350,7 +357,8 @@ func identityProviderToConnectorConfig(idpConfig *types.IdentityProvider) *dex.C
 			GroupSearchUserAttr:  idpConfig.LDAPGroupSearchUserAttr,
 			GroupSearchGroupAttr: idpConfig.LDAPGroupSearchGroupAttr,
 			GroupSearchNameAttr:  idpConfig.LDAPGroupSearchNameAttr,
-			RequiredGroups:       idpConfig.GetRequiredGroups(),
+			RequiredGroups:       requiredGroups,
+			RequiredGroupsSet:    requiredGroupsSet,
 		}
 	}
 	return cfg

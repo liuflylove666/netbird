@@ -100,7 +100,7 @@ func (m *AuthMiddleware) Handler(h http.Handler) http.Handler {
 				util.WriteError(r.Context(), status.Errorf(status.Unauthorized, "token invalid"), w)
 				return
 			}
-			if err := m.enforceMFA(r, user); err != nil {
+			if err := m.enforceUserAccessRequirements(r, user); err != nil {
 				util.WriteError(r.Context(), err, w)
 				return
 			}
@@ -116,7 +116,7 @@ func (m *AuthMiddleware) Handler(h http.Handler) http.Handler {
 				util.WriteError(r.Context(), err, w)
 				return
 			}
-			if err := m.enforceMFA(r, user); err != nil {
+			if err := m.enforceUserAccessRequirements(r, user); err != nil {
 				util.WriteError(r.Context(), err, w)
 				return
 			}
@@ -186,6 +186,39 @@ func (m *AuthMiddleware) checkJWTFromRequest(r *http.Request, authHeaderParts []
 	return user, nil
 }
 
+func (m *AuthMiddleware) enforceUserAccessRequirements(r *http.Request, user *types.User) error {
+	if err := m.enforcePasswordChange(r, user); err != nil {
+		return err
+	}
+	return m.enforceMFA(r, user)
+}
+
+func (m *AuthMiddleware) enforcePasswordChange(r *http.Request, user *types.User) error {
+	if user == nil || user.IsServiceUser || !user.ForcePasswordChange {
+		return nil
+	}
+	if r.Method == http.MethodOptions {
+		return nil
+	}
+
+	userAuth, err := nbcontext.GetUserAuthFromContext(r.Context())
+	if err != nil {
+		return err
+	}
+
+	if isCurrentUserInfoAllowedPath(r.URL.Path, r.Method) {
+		return nil
+	}
+	if userAuth.IsPAT {
+		return status.Errorf(status.PreconditionFailed, "password change required")
+	}
+	if isPasswordChangeAllowedPath(r.URL.Path, r.Method, userAuth.UserId) {
+		return nil
+	}
+
+	return status.Errorf(status.PreconditionFailed, "password change required")
+}
+
 func (m *AuthMiddleware) enforceMFA(r *http.Request, user *types.User) error {
 	if user == nil || user.IsServiceUser {
 		return nil
@@ -195,7 +228,13 @@ func (m *AuthMiddleware) enforceMFA(r *http.Request, user *types.User) error {
 	if err != nil {
 		return err
 	}
-	if !userAuth.IsPAT && isMFAAllowedPath(r.URL.Path, r.Method, userAuth.UserId) {
+	if userAuth.IsPAT {
+		return nil
+	}
+	if isMFAAllowedPath(r.URL.Path, r.Method, userAuth.UserId) {
+		return nil
+	}
+	if user.ForcePasswordChange && isPasswordChangeAllowedPath(r.URL.Path, r.Method, userAuth.UserId) {
 		return nil
 	}
 
@@ -231,8 +270,7 @@ func isMFAAllowedPath(requestPath, method, userID string) bool {
 		return true
 	}
 
-	requestPath = strings.TrimSuffix(requestPath, "/")
-	requestPath = strings.TrimPrefix(requestPath, "/api")
+	requestPath = normalizeAuthPath(requestPath)
 
 	if requestPath == "/users/current" {
 		return true
@@ -248,11 +286,7 @@ func isMFAAllowedPath(requestPath, method, userID string) bool {
 		return false
 	}
 
-	requestUserID, err := url.PathUnescape(parts[0])
-	if err != nil {
-		requestUserID = parts[0]
-	}
-	if requestUserID != userID {
+	if !requestPathUserIDMatches(parts[0], userID) {
 		return false
 	}
 
@@ -262,6 +296,50 @@ func isMFAAllowedPath(requestPath, method, userID string) bool {
 	default:
 		return false
 	}
+}
+
+func isPasswordChangeAllowedPath(requestPath, method, userID string) bool {
+	if method == http.MethodOptions {
+		return true
+	}
+
+	requestPath = normalizeAuthPath(requestPath)
+	if isCurrentUserInfoAllowedPath(requestPath, method) {
+		return true
+	}
+	if method != http.MethodPut {
+		return false
+	}
+
+	const userPrefix = "/users/"
+	if !strings.HasPrefix(requestPath, userPrefix) {
+		return false
+	}
+
+	parts := strings.Split(strings.TrimPrefix(requestPath, userPrefix), "/")
+	if len(parts) != 2 || parts[1] != "password" {
+		return false
+	}
+
+	return requestPathUserIDMatches(parts[0], userID)
+}
+
+func isCurrentUserInfoAllowedPath(requestPath, method string) bool {
+	requestPath = normalizeAuthPath(requestPath)
+	return requestPath == "/users/current" && method == http.MethodGet
+}
+
+func normalizeAuthPath(requestPath string) string {
+	requestPath = strings.TrimSuffix(requestPath, "/")
+	return strings.TrimPrefix(requestPath, "/api")
+}
+
+func requestPathUserIDMatches(rawRequestUserID, userID string) bool {
+	requestUserID, err := url.PathUnescape(rawRequestUserID)
+	if err != nil {
+		requestUserID = rawRequestUserID
+	}
+	return requestUserID == userID
 }
 
 // CheckPATFromRequest checks if the PAT is valid

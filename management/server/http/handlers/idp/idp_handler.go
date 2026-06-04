@@ -260,7 +260,8 @@ func fromAPIRequest(req *api.IdentityProviderRequest) *types.IdentityProvider {
 		idp.LDAPGroupSearchUserAttr = req.Ldap.GroupSearchUserAttr
 		idp.LDAPGroupSearchGroupAttr = req.Ldap.GroupSearchGroupAttr
 		idp.LDAPGroupSearchNameAttr = req.Ldap.GroupSearchNameAttr
-		if len(req.Ldap.RequiredGroups) > 0 {
+		if req.Ldap.RequiredGroups != nil {
+			idp.LDAPRequiredGroupsSet = true
 			idp.SetRequiredGroups(req.Ldap.RequiredGroups)
 		}
 	}
